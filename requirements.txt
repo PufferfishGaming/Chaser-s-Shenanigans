@@ -1,0 +1,6 @@
+Pillow
+extcolors
+PySide6
+pillow-heif
+piexif
+pytest
