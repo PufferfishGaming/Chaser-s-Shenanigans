@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 # Displayed bottom-left in the launcher. Bump this and push to main to test the
 # auto-updater — the bump is a new commit, so copies will pull it and the number
 # they show will change. (The updater compares commit SHAs, not this string.)
-__version__ = "2.1"
+__version__ = "2.2"
 
 
 TOOLS = [
@@ -105,6 +105,15 @@ def _link_icon(kind: str, color: str = "#c8cad0", accent: str = "#ff6b52") -> Qt
             p.drawEllipse(c, 3.2, 3.2)
         p.setBrush(QtCore.Qt.NoBrush)
 
+    elif kind == "update":
+        # Download-into-tray: clearly "fetch the update".
+        p.drawLine(QtCore.QPointF(24, 11), QtCore.QPointF(24, 27))   # shaft
+        p.drawLine(QtCore.QPointF(24, 27), QtCore.QPointF(18, 21))   # left barb
+        p.drawLine(QtCore.QPointF(24, 27), QtCore.QPointF(30, 21))   # right barb
+        p.drawLine(QtCore.QPointF(15, 32), QtCore.QPointF(33, 32))   # tray base
+        p.drawLine(QtCore.QPointF(15, 32), QtCore.QPointF(15, 28))   # left riser
+        p.drawLine(QtCore.QPointF(33, 32), QtCore.QPointF(33, 28))   # right riser
+
     p.end()
     return QtGui.QIcon(px)
 
@@ -169,18 +178,30 @@ class Launcher(QtWidgets.QMainWindow):
             cards.addWidget(Card(title_, desc_, self._make_opener(cls)))
         root.addLayout(cards, 1)
 
-        # Footer: version bottom-left, support / social / repo links bottom-right.
+        # Footer: version + update check bottom-left, links bottom-right.
         footer = QtWidgets.QHBoxLayout()
         footer.setSpacing(10)
         ver = QtWidgets.QLabel(f"v{__version__}")
         ver.setObjectName("version")
         footer.addWidget(ver, 0, QtCore.Qt.AlignBottom)
+        upd = QtWidgets.QPushButton("  Check for updates")
+        upd.setObjectName("linkbtn")
+        upd.setCursor(QtCore.Qt.PointingHandCursor)
+        upd.setIcon(_link_icon("update"))
+        upd.setIconSize(QtCore.QSize(18, 18))
+        upd.clicked.connect(self._check_updates)
+        footer.addWidget(upd, 0, QtCore.Qt.AlignBottom)
         footer.addStretch(1)
         for label, kind, url in LINKS:
             footer.addWidget(self._make_link_button(label, kind, url))
         root.addLayout(footer)
 
         self.setStyleSheet(APP_QSS)
+
+    def _check_updates(self):
+        # Manual check: parented to this window, and interactive so it always
+        # gives an answer (including "you're up to date").
+        run_update_check(self, interactive=True)
 
     def _make_link_button(self, label, kind, url):
         btn = QtWidgets.QPushButton(f"  {label}")

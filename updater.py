@@ -269,12 +269,14 @@ def _offer_restart(QtWidgets, parent, short, result) -> None:
     # If they decline, the new files are already on disk and take effect next start.
 
 
-def run_update_check(parent=None) -> None:
+def run_update_check(parent=None, interactive: bool = False) -> None:
     """Check for an update and, if newer, apply it and offer a restart.
 
-    Call this once in launcher.main() AFTER the QApplication exists but BEFORE
-    the main window is built. Safe to call unconditionally: it self-disables on
-    any error and simply returns, letting the app launch as normal.
+    Called at startup (interactive=False) it stays silent unless there's
+    something to do. Called from the in-app button (interactive=True) it also
+    reports "you're up to date" / "couldn't reach GitHub", so a click always
+    gets a visible answer. Safe to call unconditionally: it self-disables on any
+    error and simply returns, letting the app run as normal.
     """
     from PySide6 import QtCore, QtWidgets
 
@@ -282,8 +284,17 @@ def run_update_check(parent=None) -> None:
         have = current_sha()
         info = latest_remote()
         if not info:
+            if interactive:
+                QtWidgets.QMessageBox.information(
+                    parent, "Check for updates",
+                    "Couldn't reach GitHub to check for updates right now. "
+                    "Please try again later.")
             return  # offline / rate-limited — launch the version on disk
         if have == info["sha"]:
+            if interactive:
+                QtWidgets.QMessageBox.information(
+                    parent, "Check for updates",
+                    f"You're on the latest version (commit {info['short']}).")
             return  # already current
 
         if have is None:
@@ -296,8 +307,19 @@ def run_update_check(parent=None) -> None:
             before = _code_fingerprint()
             result = apply_update(info["sha"])
             busy.close()
-            if not result["ok"] or _code_fingerprint() == before:
-                return  # failed (launch current), or was already up to date
+            if not result["ok"]:
+                if interactive:
+                    QtWidgets.QMessageBox.warning(
+                        parent, "Check for updates",
+                        "The update couldn't be completed, so the current "
+                        f"version will keep running.\n\nDetails: {result['message']}")
+                return
+            if _code_fingerprint() == before:
+                if interactive:
+                    QtWidgets.QMessageBox.information(
+                        parent, "Check for updates",
+                        f"You're on the latest version (commit {info['short']}).")
+                return
             _offer_restart(QtWidgets, parent, info["short"], result)
             return
 
@@ -330,11 +352,16 @@ def run_update_check(parent=None) -> None:
 
 
 def _relaunch() -> None:
-    """Start a fresh interpreter on the (now updated) launcher and exit this one."""
+    """Start a fresh interpreter on the (now updated) launcher and exit this one.
+
+    Uses a hard exit so it behaves the same whether called before the Qt event
+    loop starts (startup check) or from inside a button handler (manual check) —
+    a plain sys.exit() can be swallowed by Qt mid-slot and leave two windows open.
+    """
     launcher = os.path.join(app_dir(), "launcher.py")
     try:
         subprocess.Popen([sys.executable, launcher])
     except OSError as exc:
         logger.warning("Could not relaunch automatically: %s", exc)
         return
-    sys.exit(0)
+    os._exit(0)
