@@ -35,7 +35,8 @@ class ConvertWorker(QtCore.QThread):
     failed = QtCore.Signal(str)
 
     def __init__(self, paths, input_root, output_root, out_ext, quality,
-                 preserve_exif, overwrite):
+                 preserve_exif, overwrite, max_edge=None, strip_gps=False,
+                 rename_pattern=""):
         super().__init__()
         self.paths = paths
         self.input_root = input_root
@@ -44,6 +45,9 @@ class ConvertWorker(QtCore.QThread):
         self.quality = quality
         self.preserve_exif = preserve_exif
         self.overwrite = overwrite
+        self.max_edge = max_edge
+        self.strip_gps = strip_gps
+        self.rename_pattern = rename_pattern
         self._cancelled = False
 
     def cancel(self):
@@ -57,9 +61,15 @@ class ConvertWorker(QtCore.QThread):
                 break
             try:
                 dst = cc.build_output_path(src, self.input_root, self.output_root, self.out_ext)
+                if self.rename_pattern:
+                    stem = cc.apply_name_pattern(self.rename_pattern, src, i + 1)
+                    dst = os.path.join(os.path.dirname(dst),
+                                       stem + os.path.splitext(dst)[1])
                 out = cc.convert_image(src, dst, quality=self.quality,
                                        preserve_exif=self.preserve_exif,
-                                       overwrite=self.overwrite)
+                                       overwrite=self.overwrite,
+                                       max_edge=self.max_edge,
+                                       strip_gps=self.strip_gps)
                 success += 1
                 self.file_done.emit(i + 1, total, src, f"Saved: {os.path.basename(out)}")
             except Exception as e:  # noqa: BLE001 - one bad file must not kill the batch
@@ -163,7 +173,33 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.cb_exif = QtWidgets.QCheckBox("Preserve EXIF metadata")
         self.cb_exif.setChecked(True)
+        self.cb_exif.toggled.connect(self._update_gps_enabled)
         root.addWidget(self.cb_exif)
+
+        self.cb_gps = QtWidgets.QCheckBox("Remove GPS (location) only — keep other EXIF")
+        root.addWidget(self.cb_gps)
+
+        # Resize (downscale longest edge; never upscales)
+        rs_row = QtWidgets.QHBoxLayout()
+        self.cb_resize = QtWidgets.QCheckBox("Resize: longest edge to")
+        self.cb_resize.toggled.connect(lambda on: self.resize_px.setEnabled(on))
+        self.resize_px = QtWidgets.QSpinBox()
+        self.resize_px.setRange(16, 30000)
+        self.resize_px.setValue(2048)
+        self.resize_px.setSuffix(" px")
+        self.resize_px.setEnabled(False)
+        rs_row.addWidget(self.cb_resize)
+        rs_row.addWidget(self.resize_px)
+        rs_row.addStretch(1)
+        root.addLayout(rs_row)
+
+        # Optional rename pattern
+        rn_row = QtWidgets.QHBoxLayout()
+        rn_row.addWidget(QtWidgets.QLabel("Rename"))
+        self.rename_edit = QtWidgets.QLineEdit()
+        self.rename_edit.setPlaceholderText("optional pattern — tokens: {name} {n} {n:03d} {date}")
+        rn_row.addWidget(self.rename_edit, 1)
+        root.addLayout(rn_row)
 
         self.cb_no_overwrite = QtWidgets.QCheckBox("Don't overwrite existing files")
         root.addWidget(self.cb_no_overwrite)
@@ -194,6 +230,11 @@ class MainWindow(QtWidgets.QMainWindow):
         root.addLayout(act)
 
         self._update_quality_enabled()
+        self._update_gps_enabled()
+
+    def _update_gps_enabled(self):
+        # GPS-only strip only makes sense when EXIF is being preserved.
+        self.cb_gps.setEnabled(self.cb_exif.isChecked())
 
     def _update_quality_enabled(self):
         # Quality only applies to lossy targets.
@@ -265,7 +306,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker = ConvertWorker(
             paths, input_root, self.output_root, out_ext,
             self.quality.value(), self.cb_exif.isChecked(),
-            overwrite=not self.cb_no_overwrite.isChecked())
+            overwrite=not self.cb_no_overwrite.isChecked(),
+            max_edge=self.resize_px.value() if self.cb_resize.isChecked() else None,
+            strip_gps=self.cb_gps.isChecked() and self.cb_exif.isChecked(),
+            rename_pattern=self.rename_edit.text().strip())
         self.worker.file_done.connect(self._on_file_done)
         self.worker.finished_all.connect(self._on_finished)
         self.worker.failed.connect(lambda m: self._log(f"FAILED: {m}"))
@@ -298,6 +342,10 @@ class MainWindow(QtWidgets.QMainWindow):
         s.setValue("format_index", self.format_combo.currentIndex())
         s.setValue("quality", self.quality.value())
         s.setValue("preserve_exif", self.cb_exif.isChecked())
+        s.setValue("strip_gps", self.cb_gps.isChecked())
+        s.setValue("resize_enabled", self.cb_resize.isChecked())
+        s.setValue("resize_px", self.resize_px.value())
+        s.setValue("rename_pattern", self.rename_edit.text())
         s.setValue("recursive", self.cb_recursive.isChecked())
         s.setValue("no_overwrite", self.cb_no_overwrite.isChecked())
         s.sync()
@@ -323,6 +371,16 @@ class MainWindow(QtWidgets.QMainWindow):
             except (ValueError, TypeError):
                 pass
         self.cb_exif.setChecked(get_bool("preserve_exif", True))
+        self.cb_gps.setChecked(get_bool("strip_gps", False))
+        self.cb_resize.setChecked(get_bool("resize_enabled", False))
+        rpx = s.value("resize_px", None)
+        if rpx is not None:
+            try:
+                self.resize_px.setValue(int(rpx))
+            except (ValueError, TypeError):
+                pass
+        self.resize_px.setEnabled(self.cb_resize.isChecked())
+        self.rename_edit.setText(s.value("rename_pattern", "") or "")
         self.cb_recursive.setChecked(get_bool("recursive", False))
         self.cb_no_overwrite.setChecked(get_bool("no_overwrite", False))
         out = s.value("output_root", "")
@@ -330,6 +388,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.output_root = out
             self.output_label.setText(out)
         self._update_quality_enabled()
+        self._update_gps_enabled()
 
 
 def main():

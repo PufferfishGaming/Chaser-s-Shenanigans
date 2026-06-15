@@ -44,14 +44,24 @@ class MainWindow(QtWidgets.QMainWindow):
         root.setContentsMargins(24, 24, 24, 24)
         root.setSpacing(12)
 
-        title = QtWidgets.QLabel("Metadata Baker")
+        title = QtWidgets.QLabel("Metadata")
         title.setObjectName("title")
         root.addWidget(title)
-        sub = QtWidgets.QLabel("Copy EXIF from a donor image into a recipient image (EXIF only; "
-                               "IPTC/XMP not copied)")
+        sub = QtWidgets.QLabel("Copy EXIF between images, or edit fields directly "
+                               "(EXIF only; IPTC/XMP not handled)")
         sub.setObjectName("subtitle")
         sub.setWordWrap(True)
         root.addWidget(sub)
+
+        tabs = QtWidgets.QTabWidget()
+        tabs.addTab(self._build_bake_tab(), "Bake (copy EXIF)")
+        tabs.addTab(self._build_edit_tab(), "Edit fields")
+        root.addWidget(tabs, 1)
+
+    def _build_bake_tab(self):
+        tab = QtWidgets.QWidget()
+        root = QtWidgets.QVBoxLayout(tab)
+        root.setSpacing(12)
 
         # Donor + recipient side by side
         cols = QtWidgets.QHBoxLayout()
@@ -135,6 +145,134 @@ class MainWindow(QtWidgets.QMainWindow):
         self.run_btn.setObjectName("primary")
         self.run_btn.clicked.connect(self.bake)
         root.addWidget(self.run_btn)
+        return tab
+
+    def _build_edit_tab(self):
+        tab = QtWidgets.QWidget()
+        root = QtWidgets.QVBoxLayout(tab)
+        root.setSpacing(10)
+
+        self.edit_target = None
+        self.edit_is_dir = False
+
+        root.addWidget(self._section("Image or folder"))
+        sel_row = QtWidgets.QHBoxLayout()
+        b_img = QtWidgets.QPushButton("Choose image…")
+        b_img.clicked.connect(self.edit_choose_image)
+        b_dir = QtWidgets.QPushButton("Choose folder… (batch)")
+        b_dir.clicked.connect(self.edit_choose_folder)
+        sel_row.addWidget(b_img)
+        sel_row.addWidget(b_dir)
+        root.addLayout(sel_row)
+        self.edit_target_label = QtWidgets.QLabel("Nothing selected (JPEG / TIFF only)")
+        self.edit_target_label.setObjectName("pathlabel")
+        self.edit_target_label.setWordWrap(True)
+        root.addWidget(self.edit_target_label)
+
+        root.addWidget(self._section("Fields (blank = keep unchanged)"))
+        form = QtWidgets.QFormLayout()
+        self.ed_artist = QtWidgets.QLineEdit()
+        self.ed_copyright = QtWidgets.QLineEdit()
+        self.ed_desc = QtWidgets.QLineEdit()
+        form.addRow("Artist / creator", self.ed_artist)
+        form.addRow("Copyright", self.ed_copyright)
+        form.addRow("Description", self.ed_desc)
+        root.addLayout(form)
+
+        self.ed_strip_gps = QtWidgets.QCheckBox("Remove GPS (location)")
+        root.addWidget(self.ed_strip_gps)
+
+        ds_row = QtWidgets.QHBoxLayout()
+        ds_row.addWidget(QtWidgets.QLabel("Shift capture time by"))
+        self.ed_shift = QtWidgets.QSpinBox()
+        self.ed_shift.setRange(-100000, 100000)
+        self.ed_shift.setSuffix(" min")
+        self.ed_shift.setToolTip("Adjust DateTimeOriginal/Digitized and DateTime "
+                                 "(e.g. fix a wrong clock or a timezone offset).")
+        ds_row.addWidget(self.ed_shift)
+        ds_row.addStretch(1)
+        root.addLayout(ds_row)
+
+        self.ed_overwrite = QtWidgets.QCheckBox("Overwrite original (otherwise writes <name>_meta)")
+        root.addWidget(self.ed_overwrite)
+
+        self.edit_log = QtWidgets.QPlainTextEdit()
+        self.edit_log.setReadOnly(True)
+        self.edit_log.setObjectName("log")
+        self.edit_log.setFixedHeight(110)
+        root.addWidget(self.edit_log)
+
+        self.edit_apply_btn = QtWidgets.QPushButton("Apply")
+        self.edit_apply_btn.setObjectName("primary")
+        self.edit_apply_btn.clicked.connect(self.apply_edits)
+        root.addWidget(self.edit_apply_btn)
+        root.addStretch(1)
+        return tab
+
+    # ---- edit tab handlers --------------------------------------------------
+    _EDIT_FILTER = "JPEG / TIFF (*.jpg *.jpeg *.tif *.tiff)"
+
+    def edit_choose_image(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Choose image", "", self._EDIT_FILTER)
+        if not path:
+            return
+        self.edit_target = path
+        self.edit_is_dir = False
+        self.edit_target_label.setText(path)
+        fields = mc.read_fields(path)
+        self.ed_artist.setText(fields["artist"])
+        self.ed_copyright.setText(fields["copyright"])
+        self.ed_desc.setText(fields["description"])
+        self._elog("Loaded current fields. Blank fields stay unchanged.")
+
+    def edit_choose_folder(self):
+        path = QtWidgets.QFileDialog.getExistingDirectory(self, "Choose folder")
+        if not path:
+            return
+        self.edit_target = path
+        self.edit_is_dir = True
+        self.edit_target_label.setText(f"{path}   (batch — applies to every JPEG/TIFF)")
+        self._elog("Batch mode: fields you fill will be written to every JPEG/TIFF.")
+
+    def apply_edits(self):
+        if not self.edit_target:
+            self._elog("Choose an image or a folder first.")
+            return
+
+        def val(line):
+            t = line.text().strip()
+            return t if t else None        # blank -> leave the field unchanged
+
+        edits = dict(artist=val(self.ed_artist), copyright=val(self.ed_copyright),
+                     description=val(self.ed_desc), strip_gps=self.ed_strip_gps.isChecked(),
+                     datetime_shift_sec=self.ed_shift.value() * 60)
+        try:
+            if self.edit_is_dir:
+                from filemanager import get_directory_files
+                globs = ["*.jpg", "*.jpeg", "*.tif", "*.tiff",
+                         "*.JPG", "*.JPEG", "*.TIF", "*.TIFF"]
+                paths = get_directory_files(self.edit_target, False, globs, [])
+                if not paths:
+                    self._elog("No JPEG/TIFF files found in that folder.")
+                    return
+                results = mc.stamp_files(paths, **edits)
+                ok = sum(1 for r in results if r.edited)
+                self._elog(f"Edited {ok}/{len(results)} file(s).")
+                for r in results:
+                    if not r.edited:
+                        self._elog(f"  {os.path.basename(r.out_path)}: {'; '.join(r.notes)}")
+            else:
+                res = mc.edit_metadata(self.edit_target, None,
+                                       overwrite=self.ed_overwrite.isChecked(), **edits)
+                self._elog(f"Saved: {os.path.basename(res.out_path)}")
+                for n in res.notes:
+                    self._elog(f"  {n}")
+        except Exception as e:  # noqa: BLE001
+            self._elog(f"ERROR: {e}")
+
+    def _elog(self, msg):
+        self.edit_log.appendPlainText(msg)
+
 
     # ---- selection ----------------------------------------------------------
     _FILTER = "Images (*.jpg *.jpeg *.tif *.tiff *.png *.webp)"

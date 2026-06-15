@@ -25,6 +25,7 @@ travels silently. The toggles below let the caller neutralise each.
 """
 import os
 import logging
+import shutil
 
 from PIL import Image
 import piexif
@@ -194,3 +195,116 @@ def describe_exif(path: str, limit: int = 12) -> list[tuple[str, str]]:
             if len(out) >= limit:
                 return out
     return out
+
+
+# ---------------------------------------------------------------- field editing
+# Editable string fields and their 0th-IFD tags. Used for both read and write.
+_EDIT_TAGS = {
+    "artist": piexif.ImageIFD.Artist,
+    "copyright": piexif.ImageIFD.Copyright,
+    "description": piexif.ImageIFD.ImageDescription,
+}
+
+
+def read_fields(path: str) -> dict:
+    """Current values of the editable string fields (for prefilling the GUI)."""
+    out = {k: "" for k in _EDIT_TAGS}
+    try:
+        zero = piexif.load(path).get("0th", {})
+    except Exception:  # noqa: BLE001
+        return out
+    for key, tag in _EDIT_TAGS.items():
+        val = zero.get(tag)
+        if isinstance(val, bytes):
+            out[key] = val.decode("utf-8", "replace").rstrip("\x00")
+        elif val is not None:
+            out[key] = str(val)
+    return out
+
+
+def _shift_datetimes(data: dict, seconds: int, notes: list[str]) -> None:
+    import datetime
+    targets = [("Exif", piexif.ExifIFD.DateTimeOriginal),
+               ("Exif", piexif.ExifIFD.DateTimeDigitized),
+               ("0th", piexif.ImageIFD.DateTime)]
+    changed = 0
+    for ifd, tag in targets:
+        raw = data.get(ifd, {}).get(tag)
+        if not raw:
+            continue
+        try:
+            s = raw.decode() if isinstance(raw, bytes) else str(raw)
+            dt = datetime.datetime.strptime(s, "%Y:%m:%d %H:%M:%S")
+            dt += datetime.timedelta(seconds=seconds)
+            data[ifd][tag] = dt.strftime("%Y:%m:%d %H:%M:%S").encode()
+            changed += 1
+        except Exception:  # noqa: BLE001
+            notes.append("A date tag couldn't be parsed; left unchanged.")
+    if changed:
+        notes.append(f"Shifted {changed} date tag(s) by {seconds}s.")
+
+
+def edit_metadata(path: str, out_path: str | None = None, *,
+                  artist: str | None = None,
+                  copyright: str | None = None,   # noqa: A002 — EXIF field name
+                  description: str | None = None,
+                  strip_gps: bool = False,
+                  datetime_shift_sec: int = 0,
+                  overwrite: bool = False) -> BakeResult:
+    """Edit EXIF fields on a JPEG/TIFF and write the result.
+
+    Only the arguments you pass are changed; ``None`` leaves a field untouched
+    (pass "" to clear one). JPEG edits are lossless — the file is copied and only
+    its EXIF segment is rewritten, never re-compressed. TIFF is re-saved (also
+    lossless). Other formats can't be surgically edited and raise ValueError.
+    """
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in _PIEXIF_FORMATS:
+        raise ValueError(f"Editing fields needs a JPEG or TIFF; '{ext}' isn't supported.")
+
+    notes: list[str] = []
+    try:
+        data = piexif.load(path)
+    except Exception as exc:  # noqa: BLE001
+        data = {}
+        notes.append(f"No readable EXIF found; writing a fresh block ({exc}).")
+    for ifd in ("0th", "Exif", "GPS", "1st"):
+        data.setdefault(ifd, {})
+
+    for key, value in (("artist", artist), ("copyright", copyright),
+                       ("description", description)):
+        if value is not None:
+            data["0th"][_EDIT_TAGS[key]] = value.encode("utf-8", "replace")
+    if strip_gps:
+        data["GPS"] = {}
+        notes.append("GPS removed.")
+    if datetime_shift_sec:
+        _shift_datetimes(data, datetime_shift_sec, notes)
+
+    if out_path is None:
+        root, e = os.path.splitext(path)
+        out_path = path if overwrite else _next_free_path(f"{root}_meta{e}")
+
+    exif_bytes = piexif.dump(data)
+    if ext in (".jpg", ".jpeg"):
+        if out_path != path:
+            shutil.copy2(path, out_path)          # preserve pixels byte-for-byte
+        piexif.insert(exif_bytes, out_path)       # rewrite EXIF only, no re-encode
+    else:  # TIFF — lossless re-save with the new EXIF
+        with Image.open(path) as im:
+            im.save(out_path, exif=exif_bytes)
+    return BakeResult(out_path, edited=True, notes=notes)
+
+
+def stamp_files(paths: list[str], *, suffix: str = "_meta", **edits) -> list[BakeResult]:
+    """Apply the same edits (artist/copyright/strip_gps/...) to many files.
+    Each is written to a new ``<name><suffix>`` file; one failure doesn't stop
+    the batch (it's reported as a note in that file's result)."""
+    results = []
+    for p in paths:
+        try:
+            root, ext = os.path.splitext(p)
+            results.append(edit_metadata(p, _next_free_path(f"{root}{suffix}{ext}"), **edits))
+        except Exception as exc:  # noqa: BLE001
+            results.append(BakeResult(p, edited=False, notes=[f"ERROR: {exc}"]))
+    return results

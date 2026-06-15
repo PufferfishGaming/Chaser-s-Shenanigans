@@ -106,7 +106,9 @@ def convert_image(src_path: str,
                   dst_path: str,
                   quality: int = 95,
                   preserve_exif: bool = True,
-                  overwrite: bool = True) -> str:
+                  overwrite: bool = True,
+                  max_edge: int | None = None,
+                  strip_gps: bool = False) -> str:
     """Convert a single image to the format implied by dst_path's extension.
 
     Args:
@@ -115,7 +117,13 @@ def convert_image(src_path: str,
         quality: Lossy quality (1-100) for JPEG/WEBP/HEIF. Ignored otherwise.
         preserve_exif: Carry the source EXIF block into the output when both the
                        source provides one and the target format supports it.
+                       Set False to strip ALL metadata.
         overwrite: If False and dst exists, append " (1)", " (2)", ... instead.
+        max_edge: If set, downscale so the longest side is at most this many
+                  pixels (never upscales). None keeps the original size.
+        strip_gps: When preserving EXIF, surgically remove the GPS block (location)
+                   while keeping the rest of the metadata. Best-effort: if the EXIF
+                   can't be parsed, the original block is kept unchanged.
 
     Returns:
         The path actually written.
@@ -142,6 +150,8 @@ def convert_image(src_path: str,
 
         # Pull EXIF before any mode conversion (conversion can drop img.info).
         exif_bytes = img.info.get("exif") if preserve_exif else None
+        if exif_bytes and strip_gps:
+            exif_bytes = _without_gps(exif_bytes)
 
         # DPI is metadata only (it sets assumed print size, not pixels), but it
         # must be carried explicitly: it lives in img.info['dpi'], NOT in the EXIF
@@ -149,6 +159,17 @@ def convert_image(src_path: str,
         # Normalize to plain floats - TIFF reports dpi as IFDRational (a Fraction
         # subclass), which is NOT an int/float and would otherwise be rejected.
         dpi = _source_dpi(img)
+
+        # Optional downscale (never upscales). Done early so later format-specific
+        # mode conversions and the save all operate on the smaller image.
+        if max_edge:
+            w, h = img.size
+            if max(w, h) > max_edge:
+                f = max_edge / float(max(w, h))
+                if img.mode == "P":
+                    img = img.convert("RGBA")
+                img = img.resize((max(1, round(w * f)), max(1, round(h * f))),
+                                 Image.LANCZOS)
 
         save_kwargs = {}
 
@@ -186,6 +207,35 @@ def convert_image(src_path: str,
         img.save(dst_path, format=out_fmt, **save_kwargs)
 
     return dst_path
+
+
+def _without_gps(exif_bytes: bytes) -> bytes:
+    """Return EXIF with the GPS (location) block removed, keeping the rest.
+    Best-effort: returns the original bytes unchanged if parsing fails."""
+    try:
+        data = piexif.load(exif_bytes)
+        data["GPS"] = {}
+        return piexif.dump(data)
+    except Exception as exc:  # noqa: BLE001 — leave EXIF intact rather than corrupt it
+        logger.info("Could not strip GPS, leaving EXIF unchanged: %r", exc)
+        return exif_bytes
+
+
+def apply_name_pattern(pattern: str, src_path: str, index: int = 1) -> str:
+    """Build an output filename stem (no extension) from a rename pattern.
+
+    Tokens use ``str.format`` fields: ``{name}`` (original stem), ``{n}`` (1-based
+    index, e.g. ``{n:03d}`` for 001), ``{date}`` (today, YYYY-MM-DD). An invalid
+    pattern falls back to the original stem so a batch never produces empty names.
+    """
+    import datetime
+    stem = os.path.splitext(os.path.basename(src_path))[0]
+    fields = {"name": stem, "n": index, "date": datetime.date.today().isoformat()}
+    try:
+        out = pattern.format(**fields).strip()
+        return out or stem
+    except Exception:  # noqa: BLE001
+        return stem
 
 
 def _source_dpi(img):

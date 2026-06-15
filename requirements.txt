@@ -4,3 +4,8 @@ PySide6
 pillow-heif
 piexif
 pytest
+numpy
+rawpy
+tifffile
+astropy
+scikit-image

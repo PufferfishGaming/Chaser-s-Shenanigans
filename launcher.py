@@ -23,28 +23,50 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from theme import APP_QSS, icon_path, set_app_user_model_id
 from updater import run_update_check, current_sha
 
-# Import the three tool windows. Each is a self-contained QMainWindow.
-from photoborder_gui import MainWindow as PhotoBorderWindow
-from converter_gui import MainWindow as ConverterWindow
-from metadata_gui import MainWindow as MetadataWindow
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _load_tool(module_name):
+    """Import a tool's MainWindow, returning (class, None) or (None, error).
+
+    A tool whose dependencies are missing (e.g. the Astro Stacker without numpy)
+    must NOT take down the whole launcher — its card is disabled instead, and the
+    other tools plus the updater keep working.
+    """
+    try:
+        mod = __import__(module_name, fromlist=["MainWindow"])
+        return mod.MainWindow, None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Tool '%s' unavailable: %s", module_name, exc)
+        return None, exc
+
+
+_PhotoBorder, _err_pb = _load_tool("photoborder_gui")
+_Converter, _err_cv = _load_tool("converter_gui")
+_Metadata, _err_md = _load_tool("metadata_gui")
+_Stacker, _err_st = _load_tool("stacker_gui")
+_QuickEdit, _err_qe = _load_tool("quickedit_gui")
 
 # Displayed bottom-left in the launcher. Bump this and push to main to test the
 # auto-updater — the bump is a new commit, so copies will pull it and the number
 # they show will change. (The updater compares commit SHAs, not this string.)
-__version__ = "2.2"
+__version__ = "3.0"
 
 
+# (title, description, window class or None, import error or None)
 TOOLS = [
     ("PhotoBorder", "Add borders, EXIF strips and colour palettes. Batch a whole "
-                    "folder in parallel with a live preview.", PhotoBorderWindow),
+                    "folder in parallel with a live preview.", _PhotoBorder, _err_pb),
     ("Format Converter", "Convert images between JPEG, PNG, WEBP, TIFF, BMP and "
-                         "HEIF/HEIC/HIF — keeping EXIF where the format allows.", ConverterWindow),
+                         "HEIF/HEIC/HIF — keeping EXIF where the format allows.", _Converter, _err_cv),
     ("Metadata Baker", "Copy EXIF from one image into another (e.g. restore camera "
                        "metadata onto an export), with GPS/orientation safety toggles.",
-     MetadataWindow),
+     _Metadata, _err_md),
+    ("Astro Stacker", "Stack a night-sky sequence into sharp stars (aligned) or "
+                      "star trails. RAW in; TIFF / FITS out.", _Stacker, _err_st),
+    ("Quick Edit", "White balance, light-pollution gradient removal and one-click "
+                   "looks, with a live preview. RAW in, 8/16-bit out.", _QuickEdit, _err_qe),
 ]
 
 
@@ -119,31 +141,37 @@ def _link_icon(kind: str, color: str = "#c8cad0", accent: str = "#ff6b52") -> Qt
 
 
 class Card(QtWidgets.QFrame):
-    """A clickable tile that opens a tool."""
-    def __init__(self, title, desc, on_click):
+    """A clickable tile that opens a tool (or shows why it's unavailable)."""
+    def __init__(self, title, desc, on_click, error=None):
         super().__init__()
         self.setObjectName("card")
-        self.setCursor(QtCore.Qt.PointingHandCursor)
-        self._on_click = on_click
+        self._on_click = on_click if (on_click and error is None) else None
+        if self._on_click:
+            self.setCursor(QtCore.Qt.PointingHandCursor)
 
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(18, 16, 18, 16)
         lay.setSpacing(8)
         t = QtWidgets.QLabel(title)
         t.setObjectName("card_title")
+        if error is not None:
+            desc = (desc + f"\n\nUnavailable — missing dependencies ({error}). "
+                    "Run install.bat to add them.")
         d = QtWidgets.QLabel(desc)
         d.setObjectName("card_desc")
         d.setWordWrap(True)
         lay.addWidget(t)
         lay.addWidget(d, 1)
-        open_btn = QtWidgets.QPushButton("Open")
+        open_btn = QtWidgets.QPushButton("Open" if error is None else "Unavailable")
         open_btn.setObjectName("primary")
-        open_btn.clicked.connect(self._on_click)
+        open_btn.setEnabled(error is None)
+        if self._on_click:
+            open_btn.clicked.connect(self._on_click)
         lay.addWidget(open_btn)
 
     def mouseReleaseEvent(self, e):
-        # Clicking anywhere on the card opens it too.
-        if e.button() == QtCore.Qt.LeftButton:
+        # Clicking anywhere on the card opens it too (when it's available).
+        if self._on_click and e.button() == QtCore.Qt.LeftButton:
             self._on_click()
         super().mouseReleaseEvent(e)
 
@@ -152,7 +180,7 @@ class Launcher(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Chaser's Shenanigans")
-        self.resize(900, 360)
+        self.resize(1180, 380)
         _ic = icon_path()
         if _ic:
             self.setWindowIcon(QtGui.QIcon(_ic))
@@ -174,8 +202,9 @@ class Launcher(QtWidgets.QMainWindow):
 
         cards = QtWidgets.QHBoxLayout()
         cards.setSpacing(16)
-        for title_, desc_, cls in TOOLS:
-            cards.addWidget(Card(title_, desc_, self._make_opener(cls)))
+        for title_, desc_, cls, err in TOOLS:
+            opener = self._make_opener(cls) if cls else None
+            cards.addWidget(Card(title_, desc_, opener, error=err))
         root.addLayout(cards, 1)
 
         # Footer: version + update check bottom-left, links bottom-right.
