@@ -115,12 +115,15 @@ class MainWindow(QtWidgets.QMainWindow):
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         outer = QtWidgets.QHBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
         panel = QtWidgets.QWidget()
+        panel.setObjectName("panel")
         panel.setFixedWidth(330)
         root = QtWidgets.QVBoxLayout(panel)
-        root.setContentsMargins(4, 4, 4, 4)
-        root.setSpacing(6)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(8)
 
         title = QtWidgets.QLabel("Quick Edit")
         title.setObjectName("title")
@@ -178,11 +181,17 @@ class MainWindow(QtWidgets.QMainWindow):
         root.addStretch(1)          # absorb extra height BELOW the controls
 
         outer.addWidget(panel)
+
+        right = QtWidgets.QWidget()
+        right.setObjectName("preview_area")
+        rlay = QtWidgets.QVBoxLayout(right)
+        rlay.setContentsMargins(16, 16, 16, 16)
         self.preview = QtWidgets.QLabel("No image loaded")
         self.preview.setAlignment(QtCore.Qt.AlignCenter)
         self.preview.setMinimumWidth(700)
         self.preview.setObjectName("preview")
-        outer.addWidget(self.preview, 1)
+        rlay.addWidget(self.preview, 1)
+        outer.addWidget(right, 1)
 
         self._set_enabled(False)
 
