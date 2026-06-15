@@ -31,6 +31,11 @@ from metadata_gui import MainWindow as MetadataWindow
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Displayed bottom-left in the launcher. Bump this and push to main to test the
+# auto-updater — the bump is a new commit, so copies will pull it and the number
+# they show will change. (The updater compares commit SHAs, not this string.)
+__version__ = "2.1"
+
 
 TOOLS = [
     ("PhotoBorder", "Add borders, EXIF strips and colour palettes. Batch a whole "
@@ -164,9 +169,12 @@ class Launcher(QtWidgets.QMainWindow):
             cards.addWidget(Card(title_, desc_, self._make_opener(cls)))
         root.addLayout(cards, 1)
 
-        # Footer: support / social / repo links, pushed to the right.
+        # Footer: version bottom-left, support / social / repo links bottom-right.
         footer = QtWidgets.QHBoxLayout()
         footer.setSpacing(10)
+        ver = QtWidgets.QLabel(f"v{__version__}")
+        ver.setObjectName("version")
+        footer.addWidget(ver, 0, QtCore.Qt.AlignBottom)
         footer.addStretch(1)
         for label, kind, url in LINKS:
             footer.addWidget(self._make_link_button(label, kind, url))
