@@ -21,7 +21,7 @@ import logging
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from theme import APP_QSS, icon_path, set_app_user_model_id
-from updater import run_update_check
+from updater import run_update_check, current_sha
 
 # Import the three tool windows. Each is a self-contained QMainWindow.
 from photoborder_gui import MainWindow as PhotoBorderWindow
@@ -181,8 +181,10 @@ class Launcher(QtWidgets.QMainWindow):
         # Footer: version + update check bottom-left, links bottom-right.
         footer = QtWidgets.QHBoxLayout()
         footer.setSpacing(10)
-        ver = QtWidgets.QLabel(f"v{__version__}")
-        ver.setObjectName("version")
+        ver = QtWidgets.QPushButton(f"v{__version__}")
+        ver.setObjectName("linkbtn")           # same bordered style/size as the buttons
+        ver.setCursor(QtCore.Qt.PointingHandCursor)
+        ver.clicked.connect(self._show_commit)
         footer.addWidget(ver, 0, QtCore.Qt.AlignBottom)
         upd = QtWidgets.QPushButton("  Check for updates")
         upd.setObjectName("linkbtn")
@@ -197,6 +199,20 @@ class Launcher(QtWidgets.QMainWindow):
         root.addLayout(footer)
 
         self.setStyleSheet(APP_QSS)
+
+    def _show_commit(self):
+        # Reveal the exact build: the commit this copy is synced to (from the
+        # updater's local marker). None until the first sync/update has run.
+        sha = current_sha()
+        if sha:
+            body = (f"Version v{__version__}\n"
+                    f"Commit {sha[:7]}\n\n"
+                    f"Full commit: {sha}")
+        else:
+            body = (f"Version v{__version__}\n\n"
+                    "No commit recorded yet — this copy hasn't synced with GitHub. "
+                    "Use “Check for updates” to record it.")
+        QtWidgets.QMessageBox.information(self, "Version", body)
 
     def _check_updates(self):
         # Manual check: parented to this window, and interactive so it always

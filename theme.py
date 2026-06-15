@@ -88,5 +88,4 @@ QPushButton#linkbtn { background: transparent; border: 1px solid #2c2e34; border
 QPushButton#linkbtn:hover { background: #20222a; border: 1px solid #3b6ea5; color: #e8e8ea; }
 QPushButton#kofi { background: transparent; border: 1px solid #6e463f; border-radius: 8px; padding: 6px 12px; color: #e9b9ac; font-size: 12px; font-weight: 600; }
 QPushButton#kofi:hover { background: #2a211f; border: 1px solid #ff6b52; color: #ffd9cc; }
-#version { color: #8a8d96; font-size: 13px; font-weight: 600; }
 """
