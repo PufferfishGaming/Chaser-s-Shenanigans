@@ -43,6 +43,67 @@ TOOLS = [
 ]
 
 
+# External links shown as a footer row in the launcher. (label, glyph, url).
+# Glyphs are drawn at runtime by _link_icon() — original, generic marks rather
+# than the brands' trademarked logos.
+LINKS = [
+    ("Support on Ko-fi", "kofi", "https://ko-fi.com/pufferfishgaming"),
+    ("Instagram", "instagram", "https://www.instagram.com/stormchaserphotography/"),
+    ("GitHub", "github", "https://github.com/PufferfishGaming/Chaser-s-Shenanigans"),
+]
+
+
+def _link_icon(kind: str, color: str = "#c8cad0", accent: str = "#ff6b52") -> QtGui.QIcon:
+    """Draw a small, original glyph for a footer link and return it as a QIcon.
+
+    Generic marks (coffee cup / camera / git-branch), not the brand logos.
+    Painted on a transparent 48px canvas so they stay crisp when Qt scales them.
+    """
+    px = QtGui.QPixmap(48, 48)
+    px.fill(QtCore.Qt.transparent)
+    p = QtGui.QPainter(px)
+    p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+    pen = QtGui.QPen(QtGui.QColor(color))
+    pen.setWidthF(3.0)
+    pen.setCapStyle(QtCore.Qt.RoundCap)
+    pen.setJoinStyle(QtCore.Qt.RoundJoin)
+    p.setPen(pen)
+    p.setBrush(QtCore.Qt.NoBrush)
+
+    if kind == "kofi":
+        # Coffee cup: body, handle, steam — with a small accent heart.
+        p.drawRoundedRect(QtCore.QRectF(11, 17, 22, 21), 4, 4)
+        p.drawArc(QtCore.QRectF(31, 19, 12, 14), 90 * 16, -180 * 16)  # handle
+        p.drawLine(QtCore.QPointF(17, 12), QtCore.QPointF(17, 8))      # steam
+        p.drawLine(QtCore.QPointF(24, 12), QtCore.QPointF(24, 8))
+        heart = QtGui.QPainterPath()
+        heart.moveTo(22, 31)
+        heart.cubicTo(18, 27, 18.5, 23.5, 22, 25)
+        heart.cubicTo(25.5, 23.5, 26, 27, 22, 31)
+        p.fillPath(heart, QtGui.QColor(accent))
+    elif kind == "instagram":
+        # Camera: frame, lens, flash dot.
+        p.drawRoundedRect(QtCore.QRectF(9, 12, 30, 26), 7, 7)
+        p.drawEllipse(QtCore.QPointF(24, 25), 7, 7)
+        p.setBrush(QtGui.QColor(color))
+        p.drawEllipse(QtCore.QPointF(33, 17.5), 1.7, 1.7)
+        p.setBrush(QtCore.Qt.NoBrush)
+    elif kind == "github":
+        # Git-branch mark: two nodes on a trunk, one branched node.
+        p.drawLine(QtCore.QPointF(17, 17), QtCore.QPointF(17, 33))
+        branch = QtGui.QPainterPath()
+        branch.moveTo(17, 26)
+        branch.cubicTo(28, 26, 33, 25, 33, 18)
+        p.drawPath(branch)
+        p.setBrush(QtGui.QColor(color))
+        for c in (QtCore.QPointF(17, 14), QtCore.QPointF(17, 36), QtCore.QPointF(33, 14)):
+            p.drawEllipse(c, 3.2, 3.2)
+        p.setBrush(QtCore.Qt.NoBrush)
+
+    p.end()
+    return QtGui.QIcon(px)
+
+
 class Card(QtWidgets.QFrame):
     """A clickable tile that opens a tool."""
     def __init__(self, title, desc, on_click):
@@ -103,7 +164,24 @@ class Launcher(QtWidgets.QMainWindow):
             cards.addWidget(Card(title_, desc_, self._make_opener(cls)))
         root.addLayout(cards, 1)
 
+        # Footer: support / social / repo links, pushed to the right.
+        footer = QtWidgets.QHBoxLayout()
+        footer.setSpacing(10)
+        footer.addStretch(1)
+        for label, kind, url in LINKS:
+            footer.addWidget(self._make_link_button(label, kind, url))
+        root.addLayout(footer)
+
         self.setStyleSheet(APP_QSS)
+
+    def _make_link_button(self, label, kind, url):
+        btn = QtWidgets.QPushButton(f"  {label}")
+        btn.setObjectName("kofi" if kind == "kofi" else "linkbtn")
+        btn.setCursor(QtCore.Qt.PointingHandCursor)
+        btn.setIcon(_link_icon(kind))
+        btn.setIconSize(QtCore.QSize(18, 18))
+        btn.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl(url)))
+        return btn
 
     def _make_opener(self, window_cls):
         def open_tool():

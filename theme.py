@@ -84,4 +84,8 @@ QProgressBar::chunk { background: #3b6ea5; border-radius: 5px; }
 #card:hover { border: 1px solid #3b6ea5; background: #20222a; }
 #card_title { font-size: 16px; font-weight: 600; color: #f4f4f6; }
 #card_desc { color: #8a8d96; font-size: 12px; }
+QPushButton#linkbtn { background: transparent; border: 1px solid #2c2e34; border-radius: 8px; padding: 6px 12px; color: #b9bcc4; font-size: 12px; }
+QPushButton#linkbtn:hover { background: #20222a; border: 1px solid #3b6ea5; color: #e8e8ea; }
+QPushButton#kofi { background: transparent; border: 1px solid #6e463f; border-radius: 8px; padding: 6px 12px; color: #e9b9ac; font-size: 12px; font-weight: 600; }
+QPushButton#kofi:hover { background: #2a211f; border: 1px solid #ff6b52; color: #ffd9cc; }
 """
