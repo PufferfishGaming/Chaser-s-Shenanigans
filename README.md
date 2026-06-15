@@ -178,7 +178,8 @@ onto your install, and restart.
   `install.bat` if no `.venv` is found).
 - **Your files are kept:** the update overlays code only — your `.venv`, scratch
   photo folders and shortcuts are left alone. The synced commit is tracked in a
-  per-machine `.update_state.json` (git-ignored).
+  per-machine `.update_state.json` (git-ignored). The first launch on a new copy
+  syncs to the latest commit automatically; after that it just checks and asks.
 
 ---
 

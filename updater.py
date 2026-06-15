@@ -20,12 +20,12 @@ Design rules this module commits to
   .py files isn't enough — new code may import something the .venv doesn't have
   yet. We detect that and re-run pip into the .venv (and if there's no .venv,
   we say so rather than pretend it worked).
-* **First-run baseline.** With no Releases/tags and possibly no `.git` (people
+* **First run syncs.** With no Releases/tags and possibly no `.git` (people
   download the ZIP), we track the synced commit in a local `.update_state.json`.
-  On the very first launch there's no marker, so we record the current latest
-  SHA as the baseline *without* pulling — a fresh download is, by definition,
-  current. The only copy this under-serves is a long-stale local checkout from
-  before this feature existed; it self-corrects on the next upstream commit.
+  On the very first launch there's no marker and we can't tell a fresh-current
+  copy from a stale one, so we sync to the latest commit straight away — quietly,
+  only prompting for a restart if the pulled code actually differs from what's on
+  disk. After that first sync the marker exists and later launches just compare.
 
 Pure logic (network / file work) is kept free of Qt so it can be tested
 head-less; only `run_update_check()` touches the GUI.
@@ -39,6 +39,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+import hashlib
 import logging
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
@@ -143,6 +144,25 @@ def _read(path: str) -> str | None:
         return None
 
 
+def _code_fingerprint() -> str:
+    """Hash of the install's top-level .py files — lets us tell whether an
+    overlay actually changed any code (vs. re-pulling identical files)."""
+    h = hashlib.sha256()
+    d = app_dir()
+    try:
+        names = sorted(n for n in os.listdir(d) if n.endswith(".py"))
+    except OSError:
+        return ""
+    for name in names:
+        try:
+            with open(os.path.join(d, name), "rb") as fh:
+                h.update(name.encode("utf-8"))
+                h.update(fh.read())
+        except OSError:
+            pass
+    return h.hexdigest()
+
+
 def apply_update(target_sha: str | None = None) -> dict:
     """Download head-of-branch and overlay it onto the install.
 
@@ -214,8 +234,43 @@ def _refresh_dependencies() -> bool | None:
 
 
 # --- GUI entry point ---------------------------------------------------------
+def _busy_dialog(QtCore, QtWidgets, parent, text):
+    busy = QtWidgets.QProgressDialog(text, "", 0, 0, parent)
+    busy.setWindowTitle("Updating")
+    busy.setCancelButton(None)
+    busy.setWindowModality(QtCore.Qt.ApplicationModal)
+    busy.show()
+    QtWidgets.QApplication.processEvents()
+    return busy
+
+
+def _deps_note(result) -> str:
+    if not result["deps_changed"]:
+        return ""
+    if result["deps_ok"] is True:
+        return "\n\nNew dependencies were installed."
+    if result["deps_ok"] is None:
+        return ("\n\nNote: requirements changed but no .venv was found — "
+                "run install.bat before starting.")
+    return ("\n\nWarning: new dependencies failed to install — "
+            "run install.bat before starting.")
+
+
+def _offer_restart(QtWidgets, parent, short, result) -> None:
+    box = QtWidgets.QMessageBox(parent)
+    box.setWindowTitle("Update installed")
+    box.setIcon(QtWidgets.QMessageBox.Information)
+    box.setText(f"Updated to {short}.{_deps_note(result)}")
+    box.setInformativeText("Restart now to use the new version?")
+    box.setStandardButtons(QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+    box.setDefaultButton(QtWidgets.QMessageBox.Yes)
+    if box.exec() == QtWidgets.QMessageBox.Yes:
+        _relaunch()
+    # If they decline, the new files are already on disk and take effect next start.
+
+
 def run_update_check(parent=None) -> None:
-    """Check for an update and, if the user agrees, apply it and offer a restart.
+    """Check for an update and, if newer, apply it and offer a restart.
 
     Call this once in launcher.main() AFTER the QApplication exists but BEFORE
     the main window is built. Safe to call unconditionally: it self-disables on
@@ -225,19 +280,28 @@ def run_update_check(parent=None) -> None:
 
     try:
         have = current_sha()
+        info = latest_remote()
+        if not info:
+            return  # offline / rate-limited — launch the version on disk
+        if have == info["sha"]:
+            return  # already current
 
-        # First launch: record a baseline, don't pull. A fresh download is current.
         if have is None:
-            info = latest_remote()
-            if info:
-                _write_sha(info["sha"])
-                logger.info("Update tracking initialised at %s.", info["short"])
+            # First launch on this copy: there's no marker, and we can't tell a
+            # fresh-and-current copy from a stale one without pulling. So sync to
+            # the repo now, silently, and only interrupt with a restart prompt if
+            # the code actually changed (a current copy pulls identical files and
+            # carries on without bothering the user).
+            busy = _busy_dialog(QtCore, QtWidgets, parent, "Syncing with GitHub…")
+            before = _code_fingerprint()
+            result = apply_update(info["sha"])
+            busy.close()
+            if not result["ok"] or _code_fingerprint() == before:
+                return  # failed (launch current), or was already up to date
+            _offer_restart(QtWidgets, parent, info["short"], result)
             return
 
-        info = latest_remote()
-        if not info or info["sha"] == have:
-            return  # offline, or already current — launch as-is
-
+        # We have a recorded version and we're behind it — ask before updating.
         msg = info["message"] or "(no description)"
         ask = QtWidgets.QMessageBox(parent)
         ask.setWindowTitle("Update available")
@@ -249,13 +313,7 @@ def run_update_check(parent=None) -> None:
         if ask.exec() != QtWidgets.QMessageBox.Yes:
             return  # user declined — launch current version
 
-        busy = QtWidgets.QProgressDialog("Downloading update…", "", 0, 0, parent)
-        busy.setWindowTitle("Updating")
-        busy.setCancelButton(None)
-        busy.setWindowModality(QtCore.Qt.ApplicationModal)
-        busy.show()
-        QtWidgets.QApplication.processEvents()
-
+        busy = _busy_dialog(QtCore, QtWidgets, parent, "Downloading update…")
         result = apply_update(info["sha"])
         busy.close()
 
@@ -266,28 +324,7 @@ def run_update_check(parent=None) -> None:
                 f"start instead.\n\nDetails: {result['message']}")
             return
 
-        note = ""
-        if result["deps_changed"]:
-            if result["deps_ok"] is True:
-                note = "\n\nNew dependencies were installed."
-            elif result["deps_ok"] is None:
-                note = ("\n\nNote: requirements changed but no .venv was found — "
-                        "run install.bat before starting.")
-            else:
-                note = ("\n\nWarning: new dependencies failed to install — "
-                        "run install.bat before starting.")
-
-        restart = QtWidgets.QMessageBox(parent)
-        restart.setWindowTitle("Update installed")
-        restart.setIcon(QtWidgets.QMessageBox.Information)
-        restart.setText(f"Updated to {info['short']}.{note}")
-        restart.setInformativeText("Restart now to use the new version?")
-        restart.setStandardButtons(QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
-        restart.setDefaultButton(QtWidgets.QMessageBox.Yes)
-        if restart.exec() == QtWidgets.QMessageBox.Yes:
-            _relaunch()
-        # If they say no, fall through and launch the still-loaded old code;
-        # the new files are on disk and take effect next start regardless.
+        _offer_restart(QtWidgets, parent, info["short"], result)
     except Exception as exc:  # noqa: BLE001 — updater must never block launch
         logger.warning("Updater error (ignored, launching normally): %s", exc)
 
