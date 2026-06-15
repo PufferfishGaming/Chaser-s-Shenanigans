@@ -164,16 +164,21 @@ skipped.
 
 ---
 
-## Build a standalone Windows .exe
+## Updates
 
-```bash
-build_exe.bat
-```
+The suite updates itself from this repository. On launch it asks GitHub whether
+`main` has moved on; if so, it offers to download the latest source, overlay it
+onto your install, and restart.
 
-This installs PyInstaller into the project's `.venv` (run `install.bat` first)
-and produces `dist\Chaser's Shenanigans.exe`, using `icon.ico` as the executable
-icon. The `fonts/` folder, the icon, and `pillow-heif`'s native libraries are
-bundled automatically.
+- **Opt-in:** you're asked before anything is downloaded.
+- **Safe to be offline:** if GitHub can't be reached, or anything goes wrong
+  mid-update, the version already on disk just starts as normal.
+- **Dependencies:** if an update changes `requirements.txt`, the updater
+  re-installs into your `.venv` automatically (and tells you to run
+  `install.bat` if no `.venv` is found).
+- **Your files are kept:** the update overlays code only — your `.venv`, scratch
+  photo folders and shortcuts are left alone. The synced commit is tracked in a
+  per-machine `.update_state.json` (git-ignored).
 
 ---
 
@@ -184,14 +189,15 @@ serves the desktop app, the CLI, and parallel workers.
 
 | File | Role |
 | --- | --- |
-| `launcher.py` | Suite home window; opens the three tools. Entry point for the `.exe`. |
+| `launcher.py` | Suite home window; opens the three tools. Entry point for the app. |
+| `updater.py` | Checks GitHub on launch and self-updates the suite from this repo. |
 | `theme.py` | Shared dark stylesheet + icon path resolver. |
 | `photoborder_gui.py` | PhotoBorder desktop UI (parallel batch + live preview). |
 | `core.py`, `border.py`, `palette.py`, `exif.py`, `text.py`, `worker.py`, `filemanager.py` | PhotoBorder engine (unchanged from the original). |
 | `main.py` | PhotoBorder command-line entry point. |
 | `converter_core.py` / `converter_gui.py` | Format conversion (logic / UI). |
 | `metadata_core.py` / `metadata_gui.py` | EXIF baking (logic / UI). |
-| `install.bat` / `run.bat` / `run_debug.bat` / `build_exe.bat` | Windows install, launch and packaging. |
+| `install.bat` / `run.bat` / `run_debug.bat` | Windows install and launch. |
 | `create_shortcuts.bat` / `create_shortcuts.ps1` | Generate app + installer shortcuts with their icons. |
 | `icon.ico` / `icon.png` | App icon. |
 | `install.ico` / `install.png` | Installer-shortcut icon. |

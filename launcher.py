@@ -21,6 +21,7 @@ import logging
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from theme import APP_QSS, icon_path, set_app_user_model_id
+from updater import run_update_check
 
 # Import the three tool windows. Each is a self-contained QMainWindow.
 from photoborder_gui import MainWindow as PhotoBorderWindow
@@ -131,6 +132,9 @@ def main():
     _ic = icon_path()
     if _ic:
         app.setWindowIcon(QtGui.QIcon(_ic))
+    # Check GitHub for a newer version before showing the UI. Self-disables on
+    # any error (offline, etc.) and may restart the app if an update is applied.
+    run_update_check()
     win = Launcher()
     win.show()
     sys.exit(app.exec())
