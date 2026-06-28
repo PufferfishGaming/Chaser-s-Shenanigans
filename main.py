@@ -57,15 +57,14 @@ def parse_arguments():
     parser.add_argument('-p', '--palette', action='store_true', default=False,
                         help='Add colour palette to the photo border')
     parser.add_argument('-t', '--border_type', type=BorderType, choices=list(BorderType), default=BorderType.SMALL,
-                        help='Border Type: p for polaroid, s for small, m for medium, l for large, i for instagram')
+                        help='Border Type: p for polaroid, s for small, m for medium, l for large')
     parser.add_argument('-r', '--recursive', action='store_true', default=False,
                         help='Process directories recursively')
     parser.add_argument('-o', '--output', default=None,
                         help='Output directory (default: a "bordered" folder next to the input)')
     parser.add_argument('--ratio', default='native',
                         help='Target output aspect ratio, padded with extra border (never crops). '
-                             'One of: native, 1:1, 4:5, 5:4, 3:2, 2:3, 16:9, 9:16, or custom W:H. '
-                             'Ignored for instagram border type.')
+                             'One of: native, 1:1, 4:5, 5:4, 3:2, 2:3, 16:9, 9:16, or custom W:H.')
     parser.add_argument('--no-overwrite', action='store_true', default=False,
                         help='Never overwrite existing output files; append " (1)", " (2)", etc. instead')
     parser.add_argument('--include', nargs='+', default=['*.jpg', '*.jpeg', '*.png', '*.JPG', '*.JPEG', '*.PNG'],

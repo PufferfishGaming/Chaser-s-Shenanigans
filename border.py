@@ -12,7 +12,6 @@ class BorderType(Enum):
     SMALL = 's'
     MEDIUM = 'm'
     LARGE = 'l'
-    INSTAGRAM = 'i'
 
     def __str__(self):
         return self.value
@@ -50,49 +49,6 @@ def get_border_size(img_width: int, img_height: int, reduceby: int=4) -> int:
 
     return border_size
 
-def calculate_ratio_border(width, height, min_border=0, target_ratio=4/5) -> tuple[int, int]:
-    """
-    Given an image width and height, and a target_ratio, calculate the horizontal and vertical border pixel
-    sizes needed to meet the target ratio.
-
-    This is useful for matching 4/5 image ratios for instagram and the like.
-
-    Args:
-        width (int): The image width
-        height (int): The image height
-        min_border (int, optional): The minimum border to add to all sides. Defaults to 0.
-        target_ratio (float, optional): The image ratio to match. Defaults to 4/5.
-
-    Returns:
-        tuple[int, int]: horizontal border pixels, vertical border pixels
-    """
-    current_ratio = width / height
-
-    if current_ratio > target_ratio:
-        # Image is too wide, add vertical borders
-        new_height = max(height, math.ceil(width / target_ratio))
-        vertical_border = max((new_height - height) // 2, min_border)
-        horizontal_border = min_border
-    else:
-        # Image is too tall, add horizontal borders
-        new_width = max(width, math.ceil(height * target_ratio))
-        horizontal_border = max((new_width - width) // 2, min_border)
-        vertical_border = min_border
-
-    # Adjust to ensure the final image meets the target ratio
-    final_width = width + 2 * horizontal_border
-    final_height = height + 2 * vertical_border
-    final_ratio = final_width / final_height
-
-    if final_ratio > target_ratio:
-        additional_vertical = math.ceil(final_width / target_ratio) - final_height
-        vertical_border += additional_vertical // 2
-    elif final_ratio < target_ratio:
-        additional_horizontal = math.ceil(final_height * target_ratio) - final_width
-        horizontal_border += additional_horizontal // 2
-
-    return horizontal_border, vertical_border
-
 def create_border(imgw: int, imgh: int, border_type: Border, target_ratio: float = None) -> Border:
     """Create a Border for an image.
 
@@ -102,8 +58,7 @@ def create_border(imgw: int, imgh: int, border_type: Border, target_ratio: float
         target_ratio: Optional final canvas width/height ratio to pad TO (e.g. 0.8
                       for 4:5, 1.0 for square, 1.7778 for 16:9). None = native, no
                       ratio padding. The image is never cropped; extra border is
-                      added to the deficient axis only. Ignored for INSTAGRAM,
-                      which has its own fixed 4:5 behaviour.
+                      added to the deficient axis only.
     """
     # top, right, bottom, left
     reduceby_map = {
@@ -111,7 +66,6 @@ def create_border(imgw: int, imgh: int, border_type: Border, target_ratio: float
         BorderType.SMALL: (32, 32, 32, 32),
         BorderType.MEDIUM: (16, 16, 16, 16),
         BorderType.LARGE: (6, 6, 6, 6),
-        BorderType.INSTAGRAM: (32, 32, 32, 32)
     }
     rtop, rright, rbottom, rleft = reduceby_map[border_type]
     btop = get_border_size(imgw, imgh, rtop)
@@ -125,18 +79,8 @@ def create_border(imgw: int, imgh: int, border_type: Border, target_ratio: float
     # only adds empty space - it doesn't drag the caption into the middle.
     caption_band = bbottom
 
-    if border_type == BorderType.INSTAGRAM:
-        # In the case of instagram, we want to enforce an image ratio of 4/5 with a minimum border so the
-        # non-padded sides also have a border.
-        ratio_border_horizonal, ratio_border_vertical = calculate_ratio_border(imgw, imgh, min_border=btop)
-        btop = ratio_border_vertical
-        bright = ratio_border_horizonal
-        bbottom = ratio_border_vertical
-        bleft = ratio_border_horizonal
-        # Instagram deliberately uses its full symmetric border for the caption.
-        caption_band = bbottom
-    elif target_ratio:
-        # Generalised ratio padding for every other border type.
+    if target_ratio:
+        # Generalised ratio padding for every border type.
         #
         # We pad the canvas (image + the per-type borders already computed) out to
         # target_ratio by ADDING extra border to the deficient axis only. Padding is
@@ -187,8 +131,13 @@ def draw_exif(img: Image, exif: dict, border: Border, font: tuple[str, int], bol
                          polaroid layout so the text never overlaps the palette
                          that occupies the bottom-right. None = no width limit.
     """
-    centered = border.border_type in (BorderType.POLAROID, BorderType.LARGE, BorderType.INSTAGRAM)
-    multiplier = 0.2 if centered else 0.5
+    centered = border.border_type in (BorderType.POLAROID, BorderType.LARGE)
+    # Fraction of the caption band the body text fills (heading gets +0.02). Lower
+    # = smaller text with more empty margin above and below within the band. 0.10
+    # leaves ~36% of the band as breathing room on each side. Because the size is
+    # derived from the band (which scales with image resolution), this proportion
+    # is identical on every export regardless of source megapixels.
+    multiplier = 0.10 if centered else 0.5
 
     # The caption lives in a band of height `band` at the very bottom of the
     # canvas. Normally this equals border.bottom; but when ratio padding has
@@ -204,17 +153,47 @@ def draw_exif(img: Image, exif: dict, border: Border, font: tuple[str, int], bol
 
     # Height-and-width constrained sizing. The heading uses the bold font; the two
     # body lines use the regular font. We size each against the width budget.
+    # Ceiling scales with the band so the proportional sizing is never clamped on
+    # high-resolution exports. (The old default of 100px capped the font on large
+    # images, making the EXIF text shrink relative to the frame as resolution grew.)
     font_size = tm.get_optimal_font_size_constrained(
         [line_lens, line_settings], band * multiplier, available_width,
-        font[0], index=font[1])
+        font[0], index=font[1], max_font_size=band)
     heading_font_size = tm.get_optimal_font_size_constrained(
         [line_heading], band * (multiplier + 0.02), available_width,
-        boldfont[0], index=boldfont[1])
-    font = tm.create_font(font_size, fontpath=font[0], index=font[1])
-    heading_font = tm.create_font(heading_font_size, fontpath=boldfont[0], index=boldfont[1])
+        boldfont[0], index=boldfont[1], max_font_size=band)
 
     stack_lines = centered
     horizontally_centered = centered and border.border_type != BorderType.POLAROID
+
+    # The SMALL/MEDIUM layout draws heading + lens + settings in a single horizontal
+    # row (stack_lines is False). A per-line width limit isn't enough there - the
+    # COMBINED row can still overrun the palette / right edge (it did on tall frames
+    # and the MEDIUM border). Shrink both fonts together, preserving the heading:body
+    # ratio, until the whole row fits the width budget. The stacked polaroid layout
+    # is handled by the per-line constraint above and is left untouched.
+    if not stack_lines and available_width:
+        reg_path, reg_idx = font[0], font[1]
+        bold_path, bold_idx = boldfont[0], boldfont[1]
+
+        def _row_width(body_sz, head_sz):
+            return (tm.measure_text_width(line_heading, head_sz, bold_path, bold_idx) + head_sz / 2
+                    + tm.measure_text_width(line_lens, body_sz, reg_path, reg_idx) + body_sz / 2
+                    + tm.measure_text_width(line_settings, body_sz, reg_path, reg_idx))
+
+        guard = 0
+        while font_size > 1 and _row_width(font_size, heading_font_size) > available_width and guard < 500:
+            scale = available_width / _row_width(font_size, heading_font_size)
+            new_body = max(1, int(font_size * scale))
+            new_head = max(1, int(heading_font_size * scale))
+            if new_body >= font_size:            # guarantee progress past int() rounding
+                new_body = font_size - 1
+                new_head = max(1, heading_font_size - 1)
+            font_size, heading_font_size = new_body, new_head
+            guard += 1
+
+    font = tm.create_font(font_size, fontpath=font[0], index=font[1])
+    heading_font = tm.create_font(heading_font_size, fontpath=boldfont[0], index=boldfont[1])
 
     # Vertical align text within the caption band at the BOTTOM of the canvas.
     # The band occupies the last `band` pixels of the image height.

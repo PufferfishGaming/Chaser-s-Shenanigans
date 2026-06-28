@@ -51,7 +51,7 @@ _QuickEdit, _err_qe = _load_tool("quickedit_gui")
 # Displayed bottom-left in the launcher. Bump this and push to main to test the
 # auto-updater — the bump is a new commit, so copies will pull it and the number
 # they show will change. (The updater compares commit SHAs, not this string.)
-__version__ = "3.0"
+__version__ = "3.1"
 
 
 # (title, description, window class or None, import error or None)

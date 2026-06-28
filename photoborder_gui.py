@@ -47,7 +47,6 @@ BORDER_LABELS = {
     BorderType.SMALL: "Small",
     BorderType.MEDIUM: "Medium",
     BorderType.LARGE: "Large",
-    BorderType.INSTAGRAM: "Instagram",
 }
 
 # Aspect-ratio presets: label -> width/height float (None = native, no padding).
@@ -336,7 +335,7 @@ class MainWindow(QtWidgets.QMainWindow):
         rl_row.addWidget(QtWidgets.QLabel("Ratio"))
         rl_row.addWidget(self.ratio_combo, 1)
         pl.addLayout(rl_row)
-        # Hint shown when ratio is overridden by the Instagram border type.
+        # Optional one-line hint under the ratio control (currently unused).
         self.ratio_hint = QtWidgets.QLabel("")
         self.ratio_hint.setObjectName("hint")
         self.ratio_hint.setWordWrap(True)
@@ -526,13 +525,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._schedule_preview()
 
     def _update_ratio_hint(self):
-        # Instagram border type enforces its own 4:5 and ignores the ratio control.
-        is_instagram = self.border_combo.currentData() == BorderType.INSTAGRAM
-        ratio_set = self.ratio_combo.currentData() is not None
-        if is_instagram and ratio_set:
-            self.ratio_hint.setText("Instagram border enforces 4:5; the Ratio setting is ignored.")
-        else:
-            self.ratio_hint.setText("")
+        # No border type overrides the ratio control any more, so nothing to warn
+        # about. Kept (and wired to the combos) so a future override has a home.
+        self.ratio_hint.setText("")
 
     def _schedule_preview(self):
         if self.preview_source:
@@ -687,7 +682,11 @@ class MainWindow(QtWidgets.QMainWindow):
         bi = s.value("border_index", None)
         if bi is not None:
             try:
-                self.border_combo.setCurrentIndex(int(bi))
+                # Clamp to range: a stale saved index (e.g. the removed Instagram
+                # type) would otherwise make setCurrentIndex clear the selection,
+                # leaving currentData() == None and crashing on process.
+                idx = max(0, min(int(bi), self.border_combo.count() - 1))
+                self.border_combo.setCurrentIndex(idx)
             except (ValueError, TypeError):
                 pass
         ri = s.value("ratio_index", None)

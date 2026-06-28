@@ -197,14 +197,17 @@ def process_image(path: str,
         band_top = img_with_border.height - band
         palette_y = band_top + round(band / 2) - round(color_palette.height / 2)
 
-        if border_type == BorderType.POLAROID:
-            # Text starts at border.left and must end before the palette begins.
-            # Leave a gap (one palette_size cell) between text and palette. This is
-            # now only a safety net - with the image-corner anchor the palette
-            # rarely reaches the text - but it guarantees no overlap if a very long
-            # EXIF string would still run into it.
-            gap = palette_size
-            available_text_width = max(50, palette_x - border.left - gap)
+    # Width budget for left-anchored caption text. POLAROID stacks it vertically;
+    # SMALL/MEDIUM lay it out in a single horizontal row. Either way the text starts
+    # at border.left and must stay clear of the palette (when present) or the photo's
+    # right edge, or it overflows / collides. LARGE centres its caption, so it
+    # doesn't use this budget.
+    if border_type in (BorderType.POLAROID, BorderType.SMALL, BorderType.MEDIUM):
+        if color_palette is not None:
+            right_bound = palette_x - palette_size       # leave one cell before the palette
+        else:
+            right_bound = border.left + img.width         # stay within the photo's width
+        available_text_width = max(50, right_bound - border.left)
 
     # --- exif -------------------------------------------------------------
     if add_exif and exif:

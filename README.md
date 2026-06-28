@@ -133,7 +133,7 @@ python main.py -t p -e -p -o output_folder Pictures\Waiting
 | --- | --- |
 | `-e, --exif` | Print photo EXIF data on the border |
 | `-p, --palette` | Add a colour palette to the border |
-| `-t, --border_type` | `p` polaroid, `s` small, `m` medium, `l` large, `i` instagram |
+| `-t, --border_type` | `p` polaroid, `s` small, `m` medium, `l` large |
 | `-r, --recursive` | Recurse into sub-folders |
 | `-o, --output` | Output directory (default: a `bordered` folder next to the input) |
 | `--ratio` | `native`, `1:1`, `4:5`, `5:4`, `3:2`, `2:3`, `16:9`, `9:16`, or custom `W:H` |
