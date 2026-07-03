@@ -17,7 +17,7 @@ import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 
 import stacker_core as sc
-from theme import APP_QSS
+from theme import ensure_applied
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._last_result = None  # np image of the most recent (preview) stack
 
         self._build_ui()
-        self.setStyleSheet(APP_QSS)
+        ensure_applied()
         self._load_settings()
 
     # ---- UI -----------------------------------------------------------------

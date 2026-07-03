@@ -20,7 +20,7 @@ import logging
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from theme import APP_QSS, icon_path, set_app_user_model_id
+from theme import ensure_applied, resolved_mode, set_mode, icon_path, set_app_user_model_id
 from updater import run_update_check, current_sha
 
 logging.basicConfig(level=logging.INFO)
@@ -51,7 +51,7 @@ _QuickEdit, _err_qe = _load_tool("quickedit_gui")
 # Displayed bottom-left in the launcher. Bump this and push to main to test the
 # auto-updater — the bump is a new commit, so copies will pull it and the number
 # they show will change. (The updater compares commit SHAs, not this string.)
-__version__ = "3.1"
+__version__ = "3.3"
 
 
 # (title, description, window class or None, import error or None)
@@ -61,7 +61,8 @@ TOOLS = [
     ("Format Converter", "Convert images between JPEG, PNG, WEBP, TIFF, BMP and "
                          "HEIF/HEIC/HIF — keeping EXIF where the format allows.", _Converter, _err_cv),
     ("Metadata Baker", "Copy EXIF from one image into another (e.g. restore camera "
-                       "metadata onto an export), with GPS/orientation safety toggles.",
+                       "metadata onto an export), edit fields, or browse and edit "
+                       "every raw EXIF tag.",
      _Metadata, _err_md),
     ("Astro Stacker", "Stack a night-sky sequence into sharp stars (aligned) or "
                       "star trails. RAW in; TIFF / FITS out.", _Stacker, _err_st),
@@ -135,6 +136,23 @@ def _link_icon(kind: str, color: str = "#c8cad0", accent: str = "#ff6b52") -> Qt
         p.drawLine(QtCore.QPointF(15, 32), QtCore.QPointF(33, 32))   # tray base
         p.drawLine(QtCore.QPointF(15, 32), QtCore.QPointF(15, 28))   # left riser
         p.drawLine(QtCore.QPointF(33, 32), QtCore.QPointF(33, 28))   # right riser
+
+    elif kind == "sun":
+        # Sun: disc + 8 rays. Shown on the theme toggle while light mode is on.
+        p.drawEllipse(QtCore.QPointF(24, 24), 6.5, 6.5)
+        import math
+        for i in range(8):
+            a = math.radians(i * 45)
+            p.drawLine(QtCore.QPointF(24 + 10.5 * math.cos(a), 24 + 10.5 * math.sin(a)),
+                       QtCore.QPointF(24 + 14.5 * math.cos(a), 24 + 14.5 * math.sin(a)))
+
+    elif kind == "moon":
+        # Crescent moon: a disc minus an offset disc. Shown while dark mode is on.
+        disc = QtGui.QPainterPath()
+        disc.addEllipse(QtCore.QPointF(23, 25), 10.0, 10.0)
+        bite = QtGui.QPainterPath()
+        bite.addEllipse(QtCore.QPointF(29, 20), 9.0, 9.0)
+        p.drawPath(disc.subtracted(bite))
 
     p.end()
     return QtGui.QIcon(px)
@@ -210,6 +228,7 @@ class Launcher(QtWidgets.QMainWindow):
         root.addLayout(cards, 1)
 
         # Footer: version + update check bottom-left, links bottom-right.
+        self._glyph_buttons = []               # (button, kind) - recoloured on theme change
         footer = QtWidgets.QHBoxLayout()
         footer.setSpacing(10)
         ver = QtWidgets.QPushButton(f"v{__version__}")
@@ -223,13 +242,49 @@ class Launcher(QtWidgets.QMainWindow):
         upd.setIcon(_link_icon("update"))
         upd.setIconSize(QtCore.QSize(18, 18))
         upd.clicked.connect(self._check_updates)
+        self._glyph_buttons.append((upd, "update"))
         footer.addWidget(upd, 0, QtCore.Qt.AlignBottom)
+
+        # Theme toggle: moon while dark mode is on, sun while light mode is on.
+        # A fresh install follows the Windows theme ("system" in theme.py);
+        # the first click pins an explicit light/dark choice.
+        self.theme_btn = QtWidgets.QPushButton()
+        self.theme_btn.setObjectName("linkbtn")
+        self.theme_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.theme_btn.setIconSize(QtCore.QSize(18, 18))
+        self.theme_btn.clicked.connect(self._toggle_theme)
+        footer.addWidget(self.theme_btn, 0, QtCore.Qt.AlignBottom)
         footer.addStretch(1)
         for label, kind, url in LINKS:
             footer.addWidget(self._make_link_button(label, kind, url))
         root.addLayout(footer)
 
-        self.setStyleSheet(APP_QSS)
+        ensure_applied()
+        self._refresh_glyphs()
+
+    def _toggle_theme(self):
+        # Two-state toggle: flip whatever is currently resolved (which on a
+        # fresh install is the Windows theme) and pin it as an explicit choice.
+        set_mode("light" if resolved_mode() == "dark" else "dark")
+        self._refresh_glyphs()   # PaletteChange refreshes too; this avoids any lag
+
+    def _refresh_glyphs(self):
+        """Redraw the footer glyphs in a colour that reads on the current theme,
+        and point the theme toggle's icon at the active mode (moon = dark)."""
+        color = "#c8cad0" if resolved_mode() == "dark" else "#5a5d66"
+        for btn, kind in self._glyph_buttons:
+            btn.setIcon(_link_icon(kind, color))
+        dark = resolved_mode() == "dark"
+        self.theme_btn.setIcon(_link_icon("moon" if dark else "sun", color))
+        self.theme_btn.setToolTip("Dark mode is on — click for light mode." if dark
+                                  else "Light mode is on — click for dark mode.")
+
+    def changeEvent(self, e):
+        # Covers Windows flipping its theme while we're in "system" mode.
+        if e.type() in (QtCore.QEvent.PaletteChange, QtCore.QEvent.StyleChange):
+            if hasattr(self, "_glyph_buttons"):
+                self._refresh_glyphs()
+        super().changeEvent(e)
 
     def _show_commit(self):
         # Reveal the exact build: the commit this copy is synced to (from the
@@ -256,6 +311,7 @@ class Launcher(QtWidgets.QMainWindow):
         btn.setCursor(QtCore.Qt.PointingHandCursor)
         btn.setIcon(_link_icon(kind))
         btn.setIconSize(QtCore.QSize(18, 18))
+        self._glyph_buttons.append((btn, kind))
         btn.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl(url)))
         return btn
 

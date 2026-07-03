@@ -8,8 +8,9 @@ A small desktop suite of photo utilities, behind one launcher. Five tools:
   (where available) HEIF/HEIC/HIF, with optional resize, metadata/GPS stripping
   and pattern-based renaming, preserving EXIF and DPI wherever the target allows.
 - **Metadata** — copy EXIF from one image into another (restore camera metadata
-  onto an edited export), *and* edit fields directly (artist, copyright, dates,
-  GPS) on a single file or a whole folder.
+  onto an edited export), edit fields directly (artist, copyright, dates, GPS)
+  on a single file or a whole folder, *and* browse and edit every raw EXIF tag,
+  exiftool-style.
 - **Astro Stacker** — combine a night-sky sequence into one image: lock onto the
   stars for a sharp sky over a smeared foreground, or onto the foreground for
   sharp ground under trailing stars. Reads RAW (incl. DNG), exports to 8-bit
@@ -138,6 +139,11 @@ cards — click one to open that tool in its own window. The launcher stays open
 so you can hop between tools. A tool whose optional dependency is missing shows a
 disabled card explaining what to install, while the others keep working.
 
+**Light / dark mode.** The suite follows your Windows theme out of the box. The
+sun/moon button in the launcher footer (next to *Check for updates*) toggles it
+manually — a moon means dark mode is on, a sun means light. The switch applies
+instantly to every open tool window, and your choice is remembered.
+
 Each tool also runs standalone if you prefer:
 
 ```bash
@@ -214,7 +220,7 @@ can't be preserved is a source that genuinely has no resolution metadata at all.
 
 ### Metadata
 
-Two tabs.
+Three tabs.
 
 **Bake (copy EXIF).** Pick a **donor** image (copy metadata *from*) and a
 **recipient** image (keep *these* pixels), see a short EXIF preview of each, set
@@ -248,6 +254,23 @@ Edits write to a new `<name>_meta` file by default, or overwrite the original if
 you tick it. JPEG edits are **lossless** — the file is copied and only its EXIF
 segment is rewritten, never re-compressed (TIFF re-saves losslessly). JPEG/TIFF
 only; other formats are declined with a clear message.
+
+**All tags.** An exiftool-style raw browser: every EXIF tag in the file, across
+all IFDs, with its name, type and value — filterable by name, IFD or value.
+Double-click a value to edit it in place (edits show green until saved); text,
+numbers, number lists and rationals are accepted (`28/10` and `2.8` both work).
+Select tags and hit *Delete selected* to stage removals (shown struck-through;
+click again to undo). Nothing touches the file until **Save**, which follows the
+same conventions as above: a new `<name>_meta` file by default, overwrite
+optional, JPEG pixels never re-encoded.
+
+Not everything is editable, on purpose. Structural entries (IFD pointers,
+strip/thumbnail offsets) are recomputed on save, so hand-editing them would
+corrupt files; the **MakerNote** is a proprietary camera blob (Sony's
+especially) that does not survive naive rewrites, and **UserComment** carries an
+encoded charset prefix. These rows are shown dimmed with a tooltip explaining
+why — the MakerNote can still be *deleted* if you want it gone. Like the rest of
+the tool, this is EXIF only: XMP and IPTC blocks are neither shown nor touched.
 
 ### Astro Stacker
 
@@ -337,7 +360,9 @@ onto your install, and restart. The version is shown bottom-left in the launcher
 Tools remember small conveniences between sessions — last-used folders, window
 size and position, and (where applicable) saved presets — via a JSON file in your
 OS config directory. It's written atomically and never load-bearing: a missing or
-corrupt file simply means "no remembered state", never a crash.
+corrupt file simply means "no remembered state", never a crash. The light/dark
+choice is remembered too (until you first click the toggle, the suite simply
+follows Windows).
 
 ---
 
@@ -351,7 +376,7 @@ serves the desktop app, the CLI, and parallel workers.
 | `launcher.py` | Suite home window; opens the five tools. Entry point for the app. |
 | `updater.py` | Checks GitHub on launch and self-updates the suite from this repo. |
 | `settings.py` | Cross-cutting persistent settings (last folders, window geometry, presets). |
-| `theme.py` | Shared dark stylesheet + icon path resolver. |
+| `theme.py` | Shared light/dark theme (stylesheet + palette, live switching, Windows-mode detection) + icon path resolver. |
 | `photoborder_gui.py` | PhotoBorder desktop UI (parallel batch + live preview). |
 | `core.py`, `border.py`, `palette.py`, `exif.py`, `text.py`, `worker.py`, `filemanager.py` | PhotoBorder engine (from the original project). |
 | `main.py` | PhotoBorder command-line entry point. |

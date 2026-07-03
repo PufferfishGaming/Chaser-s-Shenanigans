@@ -13,7 +13,7 @@ from PySide6 import QtCore, QtWidgets
 
 import converter_core as cc
 from filemanager import get_directory_files
-from theme import APP_QSS
+from theme import ensure_applied
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker = None
 
         self._build_ui()
-        self.setStyleSheet(APP_QSS)
+        ensure_applied()
         self._load_settings()
 
     def _section(self, text):

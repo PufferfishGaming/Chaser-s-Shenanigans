@@ -9,10 +9,10 @@ stale dimension tags) discussed in metadata_core.
 import os
 import logging
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 import metadata_core as mc
-from theme import APP_QSS
+from theme import ensure_applied, state_color
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.output_dir = None
 
         self._build_ui()
-        self.setStyleSheet(APP_QSS)
+        ensure_applied()
         self._load_settings()
 
     def _section(self, text):
@@ -47,8 +47,8 @@ class MainWindow(QtWidgets.QMainWindow):
         title = QtWidgets.QLabel("Metadata")
         title.setObjectName("title")
         root.addWidget(title)
-        sub = QtWidgets.QLabel("Copy EXIF between images, or edit fields directly "
-                               "(EXIF only; IPTC/XMP not handled)")
+        sub = QtWidgets.QLabel("Copy EXIF between images, edit fields directly, or browse "
+                               "and edit every raw tag (EXIF only; IPTC/XMP not handled)")
         sub.setObjectName("subtitle")
         sub.setWordWrap(True)
         root.addWidget(sub)
@@ -56,6 +56,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs = QtWidgets.QTabWidget()
         tabs.addTab(self._build_bake_tab(), "Bake (copy EXIF)")
         tabs.addTab(self._build_edit_tab(), "Edit fields")
+        tabs.addTab(self._build_tags_tab(), "All tags")
         root.addWidget(tabs, 1)
 
     def _build_bake_tab(self):
@@ -273,6 +274,222 @@ class MainWindow(QtWidgets.QMainWindow):
     def _elog(self, msg):
         self.edit_log.appendPlainText(msg)
 
+    # ---- "All tags" tab (exiftool-style raw browser/editor) ------------------
+    # Row-state colours come from theme.state_color() so they stay readable in
+    # both light and dark mode.
+
+    def _build_tags_tab(self):
+        tab = QtWidgets.QWidget()
+        root = QtWidgets.QVBoxLayout(tab)
+        root.setSpacing(10)
+
+        self.tags_path = None
+        self.tags_edits = {}        # (ifd, tag_id) -> new text (unsaved)
+        self.tags_deletions = set()  # (ifd, tag_id) staged for deletion
+
+        root.addWidget(self._section("Image"))
+        row = QtWidgets.QHBoxLayout()
+        b_img = QtWidgets.QPushButton("Choose image…")
+        b_img.clicked.connect(self.tags_choose_image)
+        row.addWidget(b_img)
+        self.tags_filter = QtWidgets.QLineEdit()
+        self.tags_filter.setPlaceholderText("Filter tags (name, IFD or value)…")
+        self.tags_filter.textChanged.connect(self._tags_apply_filter)
+        row.addWidget(self.tags_filter, 1)
+        root.addLayout(row)
+
+        self.tags_path_label = QtWidgets.QLabel("Nothing loaded (JPEG / TIFF only)")
+        self.tags_path_label.setObjectName("pathlabel")
+        self.tags_path_label.setWordWrap(True)
+        root.addWidget(self.tags_path_label)
+
+        self.tags_tree = QtWidgets.QTreeWidget()
+        self.tags_tree.setColumnCount(4)
+        self.tags_tree.setHeaderLabels(["Tag", "IFD", "Type", "Value"])
+        self.tags_tree.setRootIsDecorated(False)
+        self.tags_tree.setAlternatingRowColors(True)
+        self.tags_tree.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        # Only the Value column of editable rows may be edited - triggers are
+        # off and we open the editor ourselves on double-click.
+        self.tags_tree.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.tags_tree.itemDoubleClicked.connect(self._tags_double_clicked)
+        self.tags_tree.itemChanged.connect(self._tags_item_changed)
+        self.tags_tree.header().setStretchLastSection(True)
+        root.addWidget(self.tags_tree, 1)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        b_del = QtWidgets.QPushButton("Delete selected tag(s)")
+        b_del.setToolTip("Stage the selected tags for deletion (click again to undo). "
+                         "Nothing is written until Save.")
+        b_del.clicked.connect(self._tags_delete_selected)
+        btn_row.addWidget(b_del)
+        b_rev = QtWidgets.QPushButton("Revert changes")
+        b_rev.clicked.connect(self._tags_revert)
+        btn_row.addWidget(b_rev)
+        btn_row.addStretch(1)
+        self.tags_overwrite = QtWidgets.QCheckBox("Overwrite original (otherwise writes <name>_meta)")
+        btn_row.addWidget(self.tags_overwrite)
+        root.addLayout(btn_row)
+
+        self.tags_log = QtWidgets.QPlainTextEdit()
+        self.tags_log.setReadOnly(True)
+        self.tags_log.setObjectName("log")
+        self.tags_log.setFixedHeight(90)
+        root.addWidget(self.tags_log)
+
+        self.tags_save_btn = QtWidgets.QPushButton("Save changes")
+        self.tags_save_btn.setObjectName("primary")
+        self.tags_save_btn.clicked.connect(self._tags_save)
+        root.addWidget(self.tags_save_btn)
+        return tab
+
+    def tags_choose_image(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Choose image", "", self._EDIT_FILTER)
+        if path:
+            self._tags_load(path)
+
+    def _tags_load(self, path):
+        try:
+            entries = mc.load_all_tags(path)
+        except Exception as e:  # noqa: BLE001
+            self._tlog(f"ERROR: {e}")
+            return
+        self.tags_path = path
+        self.tags_edits.clear()
+        self.tags_deletions.clear()
+        self.tags_path_label.setText(f"{path}   ({len(entries)} tags)")
+
+        t = self.tags_tree
+        t.blockSignals(True)       # populating must not fire itemChanged
+        t.clear()
+        for e in entries:
+            it = QtWidgets.QTreeWidgetItem([e.name, e.ifd, e.type_name, e.value])
+            it.setData(0, QtCore.Qt.UserRole, (e.ifd, e.tag_id))
+            it.setData(0, QtCore.Qt.UserRole + 1, e.editable)
+            it.setData(3, QtCore.Qt.UserRole, e.value)      # original text
+            if e.editable:
+                it.setFlags(it.flags() | QtCore.Qt.ItemIsEditable)
+            else:
+                it.setToolTip(3, e.note)
+                brush = QtGui.QBrush(QtGui.QColor(state_color("viewonly")))
+                for c in range(4):
+                    it.setForeground(c, brush)
+            t.addTopLevelItem(it)
+        for c in range(3):
+            t.resizeColumnToContents(c)
+        t.blockSignals(False)
+        self._tags_apply_filter(self.tags_filter.text())
+        self._tlog(f"Loaded {len(entries)} tag(s). Double-click a value to edit; "
+                   f"nothing is written until Save.")
+
+    def _tags_double_clicked(self, item, column):
+        if column == 3 and item.data(0, QtCore.Qt.UserRole + 1):
+            self.tags_tree.editItem(item, 3)
+
+    def _tags_item_changed(self, item, column):
+        if column != 3:
+            return
+        key = item.data(0, QtCore.Qt.UserRole)
+        original = item.data(3, QtCore.Qt.UserRole)
+        text = item.text(3)
+        if text == original:
+            self.tags_edits.pop(key, None)
+            item.setData(3, QtCore.Qt.ForegroundRole, None)   # back to theme default
+        else:
+            self.tags_edits[key] = text
+            item.setForeground(3, QtGui.QBrush(QtGui.QColor(state_color("modified"))))
+
+    def _tags_delete_selected(self):
+        for it in self.tags_tree.selectedItems():
+            key = it.data(0, QtCore.Qt.UserRole)
+            name = it.text(0)
+            if key in mc._STRUCTURAL_TAGS or key[1] == -1:
+                self._tlog(f"{name} is structural / derived and can't be deleted.")
+                continue
+            font = it.font(0)
+            if key in self.tags_deletions:                    # toggle: un-stage
+                self.tags_deletions.discard(key)
+                font.setStrikeOut(False)
+                editable = it.data(0, QtCore.Qt.UserRole + 1)
+                brush = (QtGui.QBrush(QtGui.QColor(state_color("viewonly"))) if not editable
+                         else None)
+                for c in range(4):
+                    it.setFont(c, font)
+                    if brush is None:
+                        it.setData(c, QtCore.Qt.ForegroundRole, None)
+                    else:
+                        it.setForeground(c, brush)
+            else:                                             # stage deletion
+                self.tags_deletions.add(key)
+                self.tags_edits.pop(key, None)                # deletion trumps an edit
+                font.setStrikeOut(True)
+                brush = QtGui.QBrush(QtGui.QColor(state_color("deleted")))
+                for c in range(4):
+                    it.setFont(c, font)
+                    it.setForeground(c, brush)
+
+    def _tags_revert(self):
+        if self.tags_path:
+            self._tags_load(self.tags_path)
+            self._tlog("Reverted to the file's saved state.")
+
+    def _tags_apply_filter(self, text):
+        text = text.lower().strip()
+        t = self.tags_tree
+        for i in range(t.topLevelItemCount()):
+            it = t.topLevelItem(i)
+            hit = (not text or text in it.text(0).lower()
+                   or text in it.text(1).lower() or text in it.text(3).lower())
+            it.setHidden(not hit)
+
+    def changeEvent(self, e):
+        # A live theme switch changes the app palette; re-derive the baked-in
+        # row colours (modified/deleted/view-only) so they match the new mode.
+        if e.type() in (QtCore.QEvent.PaletteChange, QtCore.QEvent.StyleChange):
+            self._tags_recolor()
+        super().changeEvent(e)
+
+    def _tags_recolor(self):
+        tree = getattr(self, "tags_tree", None)   # changeEvent can fire pre-build
+        if tree is None:
+            return
+        for i in range(tree.topLevelItemCount()):
+            it = tree.topLevelItem(i)
+            key = it.data(0, QtCore.Qt.UserRole)
+            editable = it.data(0, QtCore.Qt.UserRole + 1)
+            if key in self.tags_deletions:
+                brush = QtGui.QBrush(QtGui.QColor(state_color("deleted")))
+                for c in range(4):
+                    it.setForeground(c, brush)
+            elif not editable:
+                brush = QtGui.QBrush(QtGui.QColor(state_color("viewonly")))
+                for c in range(4):
+                    it.setForeground(c, brush)
+            elif key in self.tags_edits:
+                it.setForeground(3, QtGui.QBrush(QtGui.QColor(state_color("modified"))))
+
+    def _tags_save(self):
+        if not self.tags_path:
+            self._tlog("Choose an image first.")
+            return
+        if not self.tags_edits and not self.tags_deletions:
+            self._tlog("No changes to save.")
+            return
+        try:
+            res = mc.apply_tag_edits(self.tags_path, dict(self.tags_edits),
+                                     deletions=set(self.tags_deletions),
+                                     overwrite=self.tags_overwrite.isChecked())
+        except Exception as e:  # noqa: BLE001
+            self._tlog(f"ERROR: {e}")
+            return
+        self._tlog(f"Saved: {os.path.basename(res.out_path)}")
+        for n in res.notes:
+            self._tlog(f"  {n}")
+        self._tags_load(res.out_path)   # continue working on the written file
+
+    def _tlog(self, msg):
+        self.tags_log.appendPlainText(msg)
+
 
     # ---- selection ----------------------------------------------------------
     _FILTER = "Images (*.jpg *.jpeg *.tif *.tiff *.png *.webp)"
@@ -349,6 +566,7 @@ class MainWindow(QtWidgets.QMainWindow):
         s.setValue("orientation", self.cb_orientation.isChecked())
         s.setValue("dimensions", self.cb_dimensions.isChecked())
         s.setValue("overwrite", self.cb_overwrite.isChecked())
+        s.setValue("tags_overwrite", self.tags_overwrite.isChecked())
         s.sync()
         super().closeEvent(e)
 
@@ -363,6 +581,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cb_orientation.setChecked(get_bool("orientation", True))
         self.cb_dimensions.setChecked(get_bool("dimensions", True))
         self.cb_overwrite.setChecked(get_bool("overwrite", False))
+        self.tags_overwrite.setChecked(get_bool("tags_overwrite", False))
         out = s.value("output_dir", "")
         if out and os.path.isdir(out):
             self.output_dir = out

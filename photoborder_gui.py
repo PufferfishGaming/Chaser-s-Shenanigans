@@ -33,7 +33,7 @@ from border import BorderType
 from core import process_image, STAGES
 from filemanager import should_include_file, get_directory_files
 from worker import WorkerArgs, WorkerResult, process_one, set_below_normal_priority
-from theme import APP_QSS
+from theme import ensure_applied
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -441,9 +441,9 @@ class MainWindow(QtWidgets.QMainWindow):
         return lbl
 
     def _apply_style(self):
-        # Suite-wide look lives in theme.APP_QSS so the launcher and all
+        # Suite-wide look (incl. light/dark mode) is applied app-wide by theme.py
         # three tools stay visually consistent.
-        self.setStyleSheet(APP_QSS)
+        ensure_applied()
 
 
     # ---- input/output selection --------------------------------------------

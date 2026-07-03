@@ -16,7 +16,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 import quickedit_core as qe
 import settings
-from theme import APP_QSS
+from theme import ensure_applied
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Quick Edit")
-        self.setStyleSheet(APP_QSS)
+        ensure_applied()
         self.setAcceptDrops(True)
         self.resize(1180, 760)
 

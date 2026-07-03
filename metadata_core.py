@@ -308,3 +308,234 @@ def stamp_files(paths: list[str], *, suffix: str = "_meta", **edits) -> list[Bak
         except Exception as exc:  # noqa: BLE001
             results.append(BakeResult(p, edited=False, notes=[f"ERROR: {exc}"]))
     return results
+
+
+# ---------------------------------------------------------------- raw tag browser
+# ExifTool-style "show me everything" view of a JPEG/TIFF's EXIF, with editing
+# restricted to tag types we can round-trip safely. Design rules:
+#
+# * Structural tags (IFD pointers, strip/thumbnail offsets) are shown but never
+#   editable - piexif recomputes them on save, and hand-edited offsets corrupt
+#   files. Honest display beats hiding them.
+# * MakerNote and UserComment are never editable. MakerNotes are proprietary
+#   binary blobs (Sony's especially) that do not survive naive rewrites;
+#   UserComment carries an 8-byte charset prefix that plain text editing breaks.
+# * Everything else is editable if its value is text, integers, or rationals -
+#   the shapes piexif can validate and re-dump deterministically.
+
+_IFDS = ("0th", "Exif", "GPS", "1st", "Interop")
+
+_TYPE_NAMES = {1: "Byte", 2: "Ascii", 3: "Short", 4: "Long", 5: "Rational",
+               6: "SByte", 7: "Undefined", 8: "SShort", 9: "SLong",
+               10: "SRational", 11: "Float", 12: "DFloat"}
+
+# (ifd, tag_id) pairs that are structural: piexif recomputes them on dump, so a
+# user edit is at best ignored and at worst corrupting. Numeric IDs on purpose -
+# they're stable in the EXIF spec, unlike piexif attribute names.
+_STRUCTURAL_TAGS = {
+    ("0th", 34665), ("0th", 34853),            # ExifTag / GPSTag IFD pointers
+    ("Exif", 40965),                           # Interoperability IFD pointer
+    ("0th", 273), ("0th", 278), ("0th", 279),  # StripOffsets / RowsPerStrip / StripByteCounts
+    ("1st", 273), ("1st", 278), ("1st", 279),
+    ("1st", 513), ("1st", 514),                # JPEGInterchangeFormat(+Length): thumbnail offsets
+}
+
+# (ifd, tag_id) pairs that are technically data but unsafe to edit as text.
+_BLOB_TAGS = {
+    ("Exif", 37500),   # MakerNote - proprietary binary, breaks if rewritten naively
+    ("Exif", 37510),   # UserComment - 8-byte charset prefix, not plain text
+}
+
+
+class TagEntry:
+    """One row of the raw tag browser."""
+    def __init__(self, ifd: str, tag_id: int, name: str, type_name: str,
+                 value: str, editable: bool, note: str = ""):
+        self.ifd = ifd
+        self.tag_id = tag_id
+        self.name = name
+        self.type_name = type_name
+        self.value = value          # display/edit text
+        self.editable = editable
+        self.note = note            # why not editable (tooltip), or ""
+
+
+def _tag_info(ifd: str, tag_id: int) -> tuple[str, int | None]:
+    """(name, declared_type_code) from piexif's tag tables, best-effort."""
+    table = piexif.TAGS.get("Interop" if ifd == "Interop" else ifd, {})
+    info = table.get(tag_id, {})
+    return info.get("name", f"Unknown-{tag_id}"), info.get("type")
+
+
+def _decode_text(raw: bytes) -> str | None:
+    """Bytes -> printable text, or None if it isn't cleanly textual."""
+    try:
+        s = raw.rstrip(b"\x00").decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if all(ch.isprintable() or ch in "\r\n\t" for ch in s):
+        return s
+    return None
+
+
+def _fmt_rational(raw) -> str:
+    if isinstance(raw, tuple) and len(raw) == 2 and all(isinstance(x, int) for x in raw):
+        return f"{raw[0]}/{raw[1]}"
+    return ", ".join(f"{n}/{d}" for n, d in raw)
+
+
+def format_tag_value(raw, type_code: int | None) -> tuple[str, bool, str]:
+    """(display_text, editable, note) for a stored piexif value."""
+    if isinstance(raw, bytes):
+        text = _decode_text(raw)
+        if text is not None:
+            return text, True, ""
+        preview = raw[:16].hex(" ")
+        more = "…" if len(raw) > 16 else ""
+        return f"<{len(raw)} bytes: {preview}{more}>", False, "Binary data - view only."
+    if isinstance(raw, int):
+        return str(raw), True, ""
+    if isinstance(raw, float):
+        return str(raw), True, ""
+    if isinstance(raw, tuple):
+        try:
+            if type_code in (5, 10):  # (S)Rational: (n,d) or ((n,d),...)
+                return _fmt_rational(raw), True, ""
+            if len(raw) == 2 and all(isinstance(x, int) for x in raw) and type_code is None:
+                # Unknown tag, pair of ints: could be a rational - show as one,
+                # parsing accepts both forms so the round-trip is safe.
+                return _fmt_rational(raw), True, ""
+            if all(isinstance(x, tuple) for x in raw):
+                return _fmt_rational(raw), True, ""
+            return ", ".join(str(x) for x in raw), True, ""
+        except Exception:  # noqa: BLE001 - malformed value: show, don't die
+            return repr(raw), False, "Unrecognised value shape - view only."
+    return repr(raw), False, "Unrecognised value type - view only."
+
+
+def _parse_number_pair(part: str) -> tuple[int, int]:
+    from fractions import Fraction
+    part = part.strip()
+    if "/" in part:
+        n, d = part.split("/", 1)
+        return int(n.strip()), int(d.strip())
+    f = Fraction(part).limit_denominator(1_000_000)
+    return f.numerator, f.denominator
+
+
+def parse_tag_text(ifd: str, tag_id: int, text: str, current_raw):
+    """Text from the editor -> a piexif-storable value shaped like the tag wants.
+
+    Raises ValueError with a human-readable message on bad input.
+    """
+    _, type_code = _tag_info(ifd, tag_id)
+    text = text.strip()
+    try:
+        if isinstance(current_raw, bytes) or type_code == 2:      # Ascii/text
+            return text.encode("utf-8")
+        if type_code in (5, 10) or (isinstance(current_raw, tuple)
+                                    and current_raw and isinstance(current_raw[0], tuple)):
+            parts = [p for p in text.split(",") if p.strip()]
+            if not parts:
+                raise ValueError("empty value")
+            pairs = tuple(_parse_number_pair(p) for p in parts)
+            return pairs[0] if len(pairs) == 1 else pairs         # (n,d) or ((n,d),...)
+        if isinstance(current_raw, tuple):                        # ints
+            vals = tuple(int(p.strip()) for p in text.split(",") if p.strip())
+            if not vals:
+                raise ValueError("empty value")
+            return vals[0] if len(vals) == 1 else vals
+        if isinstance(current_raw, float):
+            return float(text)
+        return int(text)                                          # plain int
+    except ValueError as exc:
+        name, _ = _tag_info(ifd, tag_id)
+        raise ValueError(
+            f"{name}: can't parse '{text}' as {_TYPE_NAMES.get(type_code, 'this tag')} "
+            f"(expected e.g. text, '42', '1, 2, 3' or '28/10')."
+        ) from exc
+
+
+def load_all_tags(path: str) -> list[TagEntry]:
+    """Every EXIF tag in the file, exiftool-style, with editability decided.
+
+    Raises ValueError for unsupported formats and lets piexif errors surface
+    so the GUI can report an unreadable file.
+    """
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in _PIEXIF_FORMATS:
+        raise ValueError(f"The tag browser needs a JPEG or TIFF; '{ext}' isn't supported.")
+    data = piexif.load(path)
+    entries: list[TagEntry] = []
+    for ifd in _IFDS:
+        for tag_id in sorted(data.get(ifd, {})):
+            raw = data[ifd][tag_id]
+            name, type_code = _tag_info(ifd, tag_id)
+            value, editable, note = format_tag_value(raw, type_code)
+            key = (ifd, tag_id)
+            if key in _STRUCTURAL_TAGS:
+                editable, note = False, "Structural - recomputed on save."
+            elif key in _BLOB_TAGS:
+                editable, note = False, ("Proprietary binary block - rewriting it corrupts "
+                                         "camera data." if tag_id == 37500 else
+                                         "Encoded block (charset prefix) - view only.")
+            entries.append(TagEntry(ifd, tag_id, name,
+                                    _TYPE_NAMES.get(type_code, "?"), value, editable, note))
+    thumb = data.get("thumbnail")
+    if thumb:
+        entries.append(TagEntry("1st", -1, "JPEGThumbnail", "Undefined",
+                                f"<{len(thumb)} bytes embedded thumbnail>", False,
+                                "Embedded preview image - view only."))
+    return entries
+
+
+def apply_tag_edits(path: str, edits: dict, deletions=(), *,
+                    out_path: str | None = None, overwrite: bool = False) -> BakeResult:
+    """Write raw tag edits/deletions to a JPEG/TIFF.
+
+    ``edits`` maps (ifd, tag_id) -> new value as TEXT (parsed and validated
+    here, so the GUI and any future CLI share one code path). ``deletions`` is
+    an iterable of (ifd, tag_id) to remove. Same output conventions as
+    edit_metadata: new ``<name>_meta`` file unless ``overwrite``; JPEG pixels
+    are never re-encoded.
+    """
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in _PIEXIF_FORMATS:
+        raise ValueError(f"Editing tags needs a JPEG or TIFF; '{ext}' isn't supported.")
+
+    notes: list[str] = []
+    data = piexif.load(path)
+
+    for (ifd, tag_id) in deletions:
+        if (ifd, tag_id) in _STRUCTURAL_TAGS:
+            raise ValueError(f"{_tag_info(ifd, tag_id)[0]} is structural and can't be deleted.")
+        if data.get(ifd, {}).pop(tag_id, None) is not None:
+            notes.append(f"Deleted {_tag_info(ifd, tag_id)[0]} ({ifd}).")
+
+    for (ifd, tag_id), text in edits.items():
+        key = (ifd, tag_id)
+        if key in _STRUCTURAL_TAGS or key in _BLOB_TAGS:
+            raise ValueError(f"{_tag_info(ifd, tag_id)[0]} is not editable.")
+        current = data.get(ifd, {}).get(tag_id)
+        if current is None:
+            raise ValueError(f"{_tag_info(ifd, tag_id)[0]} is no longer present in the file.")
+        data[ifd][tag_id] = parse_tag_text(ifd, tag_id, text, current)
+        notes.append(f"Set {_tag_info(ifd, tag_id)[0]} ({ifd}).")
+
+    if out_path is None:
+        root, e = os.path.splitext(path)
+        out_path = path if overwrite else _next_free_path(f"{root}_meta{e}")
+
+    try:
+        exif_bytes = piexif.dump(data)
+    except Exception as exc:  # noqa: BLE001 - piexif's type errors are cryptic; name the culprit if we can
+        raise ValueError(f"EXIF could not be rebuilt with these values: {exc}") from exc
+
+    if ext in (".jpg", ".jpeg"):
+        if out_path != path:
+            shutil.copy2(path, out_path)          # preserve pixels byte-for-byte
+        piexif.insert(exif_bytes, out_path)       # rewrite EXIF only, no re-encode
+    else:  # TIFF - lossless re-save with the new EXIF
+        with Image.open(path) as im:
+            im.save(out_path, exif=exif_bytes)
+    return BakeResult(out_path, edited=True, notes=notes)
