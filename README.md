@@ -23,7 +23,7 @@ sequences to everyday shoots straight off the camera.
 
 <div align="center">
 
-[![Download for Windows](https://img.shields.io/badge/Windows-Download_the_installer-2ea44f?style=for-the-badge)](https://github.com/PufferfishGaming/Chaser-s-Shenanigans/releases/download/installer/install-chasers-shenanigans.bat)
+[![Download for Windows](https://img.shields.io/badge/Windows-Download_the_installer-2ea44f?style=for-the-badge)](https://github.com/PufferfishGaming/Chaser-s-Shenanigans/releases/download/Installer/install-chasers-shenanigans.bat)
 
 One click, one file. It installs Python if needed, downloads the latest
 version, and creates your shortcuts. Re-run it any time to update or repair.
@@ -49,7 +49,7 @@ copyright notice is preserved in the `LICENSE` file, as MIT requires.
 
 ### Windows (recommended)
 
-1. **[Download the installer](https://github.com/PufferfishGaming/Chaser-s-Shenanigans/releases/download/installer/install-chasers-shenanigans.bat)**
+1. **[Download the installer](https://github.com/PufferfishGaming/Chaser-s-Shenanigans/releases/download/Installer/install-chasers-shenanigans.bat)**
    — a single `install-chasers-shenanigans.bat`. (Your browser may warn that
    `.bat` files can harm your computer — that's a blanket warning for all
    script files. Choose *Keep*.)
