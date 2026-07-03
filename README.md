@@ -21,6 +21,15 @@ A small desktop suite of photo utilities, behind one launcher. Five tools:
 Built for photographers who want a tidy, consistent workflow — from night-sky
 sequences to everyday shoots straight off the camera.
 
+<div align="center">
+
+[![Download for Windows](https://img.shields.io/badge/Windows-Download_the_installer-2ea44f?style=for-the-badge)](https://github.com/PufferfishGaming/Chaser-s-Shenanigans/releases/download/installer/install-chasers-shenanigans.bat)
+
+One click, one file. It installs Python if needed, downloads the latest
+version, and creates your shortcuts. Re-run it any time to update or repair.
+
+</div>
+
 ---
 
 ## Credits
@@ -39,6 +48,28 @@ copyright notice is preserved in the `LICENSE` file, as MIT requires.
 ## Installation
 
 ### Windows (recommended)
+
+1. **[Download the installer](https://github.com/PufferfishGaming/Chaser-s-Shenanigans/releases/download/installer/install-chasers-shenanigans.bat)**
+   — a single `install-chasers-shenanigans.bat`. (Your browser may warn that
+   `.bat` files can harm your computer — that's a blanket warning for all
+   script files. Choose *Keep*.)
+2. **Double-click it.** It walks through everything on its own:
+   - installs **Python 3.10+** for you if it isn't already there (official
+     python.org installer, x64 or ARM64 auto-detected),
+   - asks **where to install** (Enter accepts the default under your user
+     folder — pick somewhere you can write to without admin rights, since the
+     app updates itself by writing into its own folder),
+   - downloads the **latest version** straight from this repository,
+   - sets up an isolated `.venv` and installs all dependencies,
+   - creates **Start Menu and Desktop shortcuts**, then launches the app.
+3. That's it. From then on, start the app from its shortcut. The app keeps
+   itself up to date (see [Updates](#updates)); the *Update Chaser's
+   Shenanigans* Start Menu shortcut re-runs the installer as a manual
+   update / repair if you ever need it.
+
+### Windows (from source)
+
+If you'd rather clone or download this repository yourself:
 
 1. Install **Python 3.10+** from <https://www.python.org/downloads/> and tick
    *"Add python.exe to PATH"* in the installer.
@@ -63,6 +94,9 @@ it keeps a console window open so you can see any startup error.
 > `install.bat` on each machine to confirm what that machine supports.
 
 ### Desktop shortcuts & taskbar icon
+
+*(The one-click installer creates Start Menu and Desktop shortcuts for you —
+this section is for source installs.)*
 
 A `.bat` file can't carry its own icon — Windows always shows the generic
 batch-script icon for the file itself. To get a real icon on a launcher, use a
