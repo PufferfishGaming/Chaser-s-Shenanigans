@@ -15,7 +15,8 @@ A small desktop suite of photo utilities, behind one launcher. Five tools:
   stars for a sharp sky over a smeared foreground, or onto the foreground for
   sharp ground under trailing stars. Reads RAW (incl. DNG), exports to 8-bit
   formats plus 16-bit / 32-bit-float TIFF and FITS.
-- **Quick Edit** — fast single-image adjustments with a live preview: white
+- **Quick Edit** — fast single-image adjustments with a live preview: film
+  simulations inspired by classic stocks, white
   balance, light-pollution gradient removal and one-click looks. RAW in, 8/16-bit
   out.
 
@@ -325,11 +326,28 @@ for responsiveness; full resolution is processed only on export. Controls:
 - **Preset** — one-click looks: *Silver* and *Red-filter sky* (black & white),
   *Moonlit* (cool), *Ember* (warm) and *Faded* (matte). Your white-balance and
   gradient settings layer on top of the chosen look.
+- **Film simulation** — thirteen looks inspired by classic stocks: colour
+  negatives (Kodak Portra 400/160, Gold 200, Ektar 100, Fujifilm Superia 400,
+  Pro 400H), slides (Fujifilm Velvia 50, Provia 100F, Kodachrome 64), cine
+  (CineStill 800T) and black & white (Ilford HP5 Plus 400, Kodak Tri-X 400,
+  Fujifilm Acros 100). A **Film grain** toggle adds luminance grain matched to
+  the chosen stock's speed (fine on Velvia/Acros, gritty on Tri-X/800T; a
+  subtle default when no film is selected). The film layers under the Preset,
+  so e.g. *Faded* + Portra combine.
 - **Gradient removal** — flattens a light-pollution gradient or vignette by
   modelling the smooth background and subtracting it. Good for skies; a large
   bright/dark foreground can bias the automatic model.
 - **White balance** — *Auto* (gray-world; note it can cool a night sky), plus
   manual **Temperature** (cool ↔ warm) and **Tint** (green ↔ magenta).
+
+> **Honest limitations of the film looks.** These are parametric
+> approximations — tone curve, colour cast, saturation and split-toning tuned
+> to each stock's *character* — not colorimetric emulations built from measured
+> film LUTs. They aim for "recognisably Portra-ish", not "indistinguishable
+> from a scan". Effects like CineStill's red halation aren't modelled. The
+> grain is deterministic (a fixed seed), so re-exporting gives identical
+> results. Film names are trademarks of Kodak, Fujifilm and Ilford, used here
+> to indicate the inspiration.
 
 Export to JPEG/PNG/WEBP/TIFF (8-bit) or 16-bit TIFF; the suggested name is
 `<original>_edited`.

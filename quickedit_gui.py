@@ -128,7 +128,7 @@ class MainWindow(QtWidgets.QMainWindow):
         title = QtWidgets.QLabel("Quick Edit")
         title.setObjectName("title")
         root.addWidget(title)
-        sub = QtWidgets.QLabel("White balance and one-click looks.")
+        sub = QtWidgets.QLabel("White balance, film simulations and one-click looks.")
         sub.setWordWrap(True)
         root.addWidget(sub)
 
@@ -144,6 +144,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.preset_combo.addItems(qe.preset_names())
         self.preset_combo.currentTextChanged.connect(self._schedule_preview)
         root.addWidget(self.preset_combo)
+
+        root.addWidget(self._section("Film simulation"))
+        self.film_combo = QtWidgets.QComboBox()
+        self.film_combo.addItems(qe.film_names())
+        self.film_combo.setToolTip("Looks inspired by classic film stocks — parametric "
+                                   "approximations of their character, not exact emulations.")
+        self.film_combo.currentTextChanged.connect(self._schedule_preview)
+        root.addWidget(self.film_combo)
+        self.cb_grain = QtWidgets.QCheckBox("Film grain")
+        self.cb_grain.setToolTip("Luminance grain matched to the chosen stock's speed "
+                                 "(a subtle default when no film is selected).")
+        self.cb_grain.toggled.connect(self._schedule_preview)
+        root.addWidget(self.cb_grain)
 
         root.addWidget(self._section("Light pollution"))
         root.addWidget(QtWidgets.QLabel("Gradient removal"))
@@ -196,8 +209,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_enabled(False)
 
     def _set_enabled(self, on):
-        for w in (self.preset_combo, self.s_gradient, self.cb_autowb, self.s_temp,
-                  self.s_tint, self.reset_btn, self.export_btn):
+        for w in (self.preset_combo, self.film_combo, self.cb_grain, self.s_gradient,
+                  self.cb_autowb, self.s_temp, self.s_tint, self.reset_btn, self.export_btn):
             w.setEnabled(on)
 
     # ---------------------------------------------------------------- params
@@ -208,6 +221,9 @@ class MainWindow(QtWidgets.QMainWindow):
         p.auto_wb = self.cb_autowb.isChecked()
         p.temp = self.s_temp.value() / 100.0
         p.tint = self.s_tint.value() / 100.0
+        film = self.film_combo.currentText()
+        p.film = "" if film == "None" else film
+        p.grain = self.cb_grain.isChecked()
         return p
 
     def _reset(self):
@@ -217,6 +233,8 @@ class MainWindow(QtWidgets.QMainWindow):
             s.blockSignals(False)
         self.cb_autowb.setChecked(False)
         self.preset_combo.setCurrentIndex(0)
+        self.film_combo.setCurrentIndex(0)
+        self.cb_grain.setChecked(False)
         self._schedule_preview()
 
     # ---------------------------------------------------------------- preview

@@ -51,7 +51,7 @@ _QuickEdit, _err_qe = _load_tool("quickedit_gui")
 # Displayed bottom-left in the launcher. Bump this and push to main to test the
 # auto-updater — the bump is a new commit, so copies will pull it and the number
 # they show will change. (The updater compares commit SHAs, not this string.)
-__version__ = "3.3"
+__version__ = "3.4"
 
 
 # (title, description, window class or None, import error or None)
@@ -66,8 +66,8 @@ TOOLS = [
      _Metadata, _err_md),
     ("Astro Stacker", "Stack a night-sky sequence into sharp stars (aligned) or "
                       "star trails. RAW in; TIFF / FITS out.", _Stacker, _err_st),
-    ("Quick Edit", "White balance, light-pollution gradient removal and one-click "
-                   "looks, with a live preview. RAW in, 8/16-bit out.", _QuickEdit, _err_qe),
+    ("Quick Edit", "Film simulations, white balance, light-pollution gradient "
+                   "removal and one-click looks, live preview. RAW in, 8/16-bit out.", _QuickEdit, _err_qe),
 ]
 
 
