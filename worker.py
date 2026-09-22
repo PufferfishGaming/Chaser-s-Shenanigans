@@ -44,13 +44,24 @@ class WorkerArgs:
     add_exif: bool
     add_palette: bool
     border_type_value: str           # BorderType stored as its .value char ('p','s',...)
-    font: tuple                      # (filename, variant_index)
+    font: tuple                      # (filename, variant_index[, weight])
     boldfont: tuple
     fontdir: str
     output_root: str
     input_root: str
     target_ratio: float = None
     overwrite: bool = True
+    # Every process_image option the GUI can set has to be carried here, or a
+    # folder batch silently renders something different from the preview. These
+    # were missing once: the GUI passed them, the constructor raised TypeError
+    # before any file was touched, and the batch thread died without a word.
+    rotate: int = 0
+    auto_orient: bool = True
+    custom_text: str = None
+    custom_font: tuple = None
+    custom_size_mult: float = 1.0
+    custom_centered: bool = False
+    placements: dict = None          # {element: layout.Placement} - a picklable dataclass
 
 
 @dataclass
@@ -79,6 +90,13 @@ def process_one(args: WorkerArgs) -> WorkerResult:
             preview_max_edge=None,
             target_ratio=args.target_ratio,
             overwrite=args.overwrite,
+            rotate=args.rotate,
+            auto_orient=args.auto_orient,
+            custom_text=args.custom_text,
+            custom_font=args.custom_font,
+            custom_size_mult=args.custom_size_mult,
+            custom_centered=args.custom_centered,
+            placements=args.placements,
         )
         return WorkerResult(path=args.path, save_path=save_path)
     except Exception as e:  # noqa: BLE001 - intentionally broad, reported not raised

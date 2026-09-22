@@ -1,10 +1,52 @@
 """
 Photo Exif extraction functions
 """
+import unicodedata
 from dataclasses import dataclass
 from fractions import Fraction
 from PIL import Image
 from PIL.ExifTags import TAGS
+
+
+def clean_exif_text(value) -> str:
+    """Strip control/format characters out of an EXIF string, then tidy spacing.
+
+    Cameras NUL-pad the fixed-length ASCII EXIF fields, and `str.strip()` removes
+    whitespace but NOT control characters, so those NULs used to reach the
+    renderer. Whether they were *visible* depended entirely on the font: Roboto
+    and EB Garamond map NUL to a zero-width glyph, while Cormorant Garamond,
+    Libre Baskerville and Lora map it to a `.notdef` box - which is why the
+    caption grew boxes in exactly three of the five EXIF fonts and looked like a
+    font bug rather than a data bug.
+
+    They also inflated the *measured* width (three NULs added 72-120px at size
+    48), so the shrink-to-fit sizing was scaling real text down to make room for
+    characters that were not supposed to be there.
+
+    Every Unicode "other" category (Cc, Cf, Cs, Co, Cn) goes. Ones that are also
+    whitespace become a space rather than vanishing, so a value that used a
+    newline as a separator does not have its words run together. Runs of
+    whitespace then collapse and the result is stripped.
+
+    This is the single choke point: `ExifItem.__str__` calls it, so nothing can
+    reach a font without passing through here.
+    """
+    if value is None:
+        return ''
+    if isinstance(value, bytes):
+        # get_exif leaves undecodable bytes as bytes rather than raising; without
+        # this they would render as the literal repr of the bytes object instead
+        value = value.decode('utf-8', 'ignore')
+    elif not isinstance(value, str):
+        value = str(value)
+    out = []
+    for ch in value:
+        if unicodedata.category(ch)[0] == 'C':
+            # A control that is also whitespace (newline, tab, CR)
+            out.append(' ' if ch.isspace() else '')
+        else:
+            out.append(ch)
+    return ' '.join(''.join(out).split())
 
 def format_shutter_speed(shutter_speed: str) -> str:
     """
@@ -30,7 +72,9 @@ def format_focal_length(focal_length: str) -> str:
         if focal_length_dp >= 2: # Checks if the focal length has 2 decimal places or greater eg 24.878mm
             return round(float(focal_length), 2)
         else:
-            return round(float(focal_length)) # Rounds focal length to nearest whole number if a single decimal point is present eg 24.0mm is 24mm
+            # Round to a whole number when there is a single decimal place:
+            # 24.0mm reads as 24mm.
+            return round(float(focal_length))
     except ValueError:
         return focal_length
 
@@ -50,12 +94,17 @@ class ExifItem:
     def __str__(self) -> str:
         if self.data is None or self.data == '':
             return ''
-        fmt_data = str(self.data).strip()
+        # Clean BEFORE the emptiness test and before any formatting: a value of
+        # nothing but NULs must collapse to '' rather than render the template
+        # around it ("Shot on " with no camera).
+        fmt_data = clean_exif_text(self.data)
+        if not fmt_data:
+            return ''
 
         # Deal with any special case data formatting
         if self.tag == 'ExposureTime':
            fmt_data = format_shutter_speed(fmt_data)
-        
+
         # Deal with any special case data formatting
         if self.tag == 'FocalLength':
            fmt_data = format_focal_length(fmt_data)

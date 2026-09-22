@@ -400,12 +400,20 @@ class BatchWorker(QtCore.QThread):
             self.finished_all.emit(0, 0)
             return
 
-        p = self.params
-        # Single file -> sequential, keep per-stage progress.
-        if total == 1:
-            self._run_sequential(total)
-        else:
-            self._run_parallel(total)
+        # Nothing may escape this method without a signal. An exception raised in
+        # QThread.run() is printed to stderr and the thread just ends: no
+        # finished_all, no failed, so the window keeps Process disabled for ever
+        # and the user sees a button that "does nothing". That is exactly how a
+        # WorkerArgs TypeError presented.
+        try:
+            # Single file -> sequential, keep per-stage progress.
+            if total == 1:
+                self._run_sequential(total)
+            else:
+                self._run_parallel(total)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("batch failed")
+            self.failed.emit(f"{type(e).__name__}: {e}")
 
     def _run_sequential(self, total):
         p = self.params
@@ -448,24 +456,11 @@ class BatchWorker(QtCore.QThread):
         p = self.params
         success = fail = 0
         done = 0
-        args_list = [
-            WorkerArgs(
-                path=path, add_exif=p["add_exif"], add_palette=p["add_palette"],
-                border_type_value=p["border_type"].value, font=p["font"],
-                boldfont=p["boldfont"], fontdir=p["fontdir"],
-                output_root=self.output_root, input_root=self.input_root,
-                target_ratio=p.get("target_ratio"),
-                overwrite=p.get("overwrite", True),
-                custom_text=p.get("custom_text"),
-                custom_font=p.get("custom_font"),
-                custom_size_mult=p.get("custom_size_mult", 1.0),
-                custom_centered=p.get("custom_centered", False),
-                rotate=p.get("rotate", 0),
-                auto_orient=p.get("auto_orient", True),
-                placements=p.get("placements"),
-            )
-            for path in self.paths
-        ]
+        try:
+            args_list = self._build_worker_args(p)
+        except Exception as e:  # noqa: BLE001
+            self.failed.emit(f"{type(e).__name__}: {e}")
+            return
         try:
             initializer = set_below_normal_priority if self.background else None
             with ProcessPoolExecutor(max_workers=self.max_workers,
@@ -494,6 +489,26 @@ class BatchWorker(QtCore.QThread):
             self.failed.emit(f"{type(e).__name__}: {e}")
             return
         self.finished_all.emit(success, fail)
+
+    def _build_worker_args(self, p):
+        return [
+            WorkerArgs(
+                path=path, add_exif=p["add_exif"], add_palette=p["add_palette"],
+                border_type_value=p["border_type"].value, font=p["font"],
+                boldfont=p["boldfont"], fontdir=p["fontdir"],
+                output_root=self.output_root, input_root=self.input_root,
+                target_ratio=p.get("target_ratio"),
+                overwrite=p.get("overwrite", True),
+                custom_text=p.get("custom_text"),
+                custom_font=p.get("custom_font"),
+                custom_size_mult=p.get("custom_size_mult", 1.0),
+                custom_centered=p.get("custom_centered", False),
+                rotate=p.get("rotate", 0),
+                auto_orient=p.get("auto_orient", True),
+                placements=p.get("placements"),
+            )
+            for path in self.paths
+        ]
 
 
 # ----------------------------------------------------------------------------
@@ -526,6 +541,12 @@ class MainWindow(QtWidgets.QMainWindow):
         # sluggish for the rest of the session.
         self._live_drag_budget_ms = 30
         self.batch_worker = None
+        # Who is allowed to write the status strip and stage bar. Preview and batch
+        # share both, and the preview used to clear them unconditionally on every
+        # render - so a debounced preview finishing just after a batch erased the
+        # "N processed" result, and one landing mid-batch replaced the progress.
+        # "batch" holds the strip from Process until the next input change.
+        self._status_owner = "preview"
         self.tmp_preview_dir = os.path.join(
             QtCore.QStandardPaths.writableLocation(QtCore.QStandardPaths.TempLocation),
             "photoborder_preview",
@@ -957,6 +978,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._accept_file(path)
 
     def _accept_file(self, path):
+        self._status_owner = "preview"
         self.input_path = path
         self.input_is_dir = False
         self.input_label.setText(path)
@@ -967,6 +989,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._schedule_preview()
 
     def _accept_folder(self, path):
+        self._status_owner = "preview"
         self.input_path = path
         self.input_is_dir = True
         self.input_label.setText(path)
@@ -1363,8 +1386,9 @@ class MainWindow(QtWidgets.QMainWindow):
         # at full resolution. Border proportions differ by <1% from the full-res
         # output, which is imperceptible in a preview.
         params["preview_max_edge"] = PREVIEW_DISPLAY_EDGE
-        self.status.show_message("Rendering preview…", "busy")
-        self.stage_bar.setVisible(True)
+        if self._status_owner == "preview":
+            self.status.show_message("Rendering preview…", "busy")
+            self.stage_bar.setVisible(True)
         self.preview_worker = PreviewWorker(params, self.tmp_preview_dir,
                                             source=self._valid_cached_source())
         self.preview_worker.stage.connect(self._on_stage)
@@ -1373,6 +1397,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.preview_worker.start()
 
     def _on_stage(self, stage, frac):
+        # Both workers report stages here; a preview's must not overwrite a batch.
+        from_batch = self.batch_worker is not None and self.sender() is self.batch_worker
+        if not from_batch and self._status_owner != "preview":
+            return
         self.stage_bar.setVisible(True)
         self.stage_bar.setValue(int(frac * 100))
         self.status.show_message(f"{stage}…", "busy")
@@ -1384,8 +1412,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self._cached_source = source
         pix = QtGui.QPixmap(out_path)
         if pix.isNull():
-            self.status.show_message("Preview failed to load", "error")
-            self.stage_bar.setVisible(False)
+            if self._status_owner == "preview":
+                self.status.show_message("Preview failed to load", "error")
+                self.stage_bar.setVisible(False)
             return
         # The canvas scales the pixmap itself so its screen->canvas mapping comes
         # from the same numbers it paints with.
@@ -1393,12 +1422,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.preview_label.set_render(pix, geometry)
         self.preview_status.setText(
             f"{os.path.basename(self.preview_source)}  ·  drag an outline to move it")
-        self.stage_bar.setVisible(False)
-        self.status.clear()
+        if self._status_owner == "preview":
+            self.stage_bar.setVisible(False)
+            self.status.clear()
 
     def _on_preview_failed(self, msg):
-        self.status.show_message(f"Preview error: {msg}", "error")
-        self.stage_bar.setVisible(False)
+        if self._status_owner == "preview":
+            self.status.show_message(f"Preview error: {msg}", "error")
+            self.stage_bar.setVisible(False)
         self._log(f"Preview error: {msg}")
 
     # ---- batch processing ---------------------------------------------------
@@ -1430,6 +1461,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.file_bar.setRange(0, len(paths))
         self.file_bar.setValue(0)
         self.file_bar.setVisible(True)
+        self._status_owner = "batch"
         self.status.show_message(f"Processing {len(paths)} file(s)…", "busy")
         self._log(f"Processing {len(paths)} file(s) → {self.output_root}")
         self.run_btn.setEnabled(False)
@@ -1441,7 +1473,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.batch_worker.file_done.connect(self._on_file_done)
         self.batch_worker.stage.connect(self._on_stage)
         self.batch_worker.finished_all.connect(self._on_batch_finished)
-        self.batch_worker.failed.connect(self._on_preview_failed)
+        self.batch_worker.failed.connect(self._on_batch_failed)
         self.batch_worker.start()
 
     def _on_file_done(self, done, total, src, msg):
@@ -1460,6 +1492,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status.show_message(
             f"{success} processed, {fail} failed" if fail else f"{success} processed",
             "warn" if fail else "ok")
+
+    def _on_batch_failed(self, msg):
+        # Separate from _on_preview_failed on purpose: that one leaves the batch
+        # controls alone, so a failed batch routed there kept Process disabled.
+        self._log(f"Batch failed: {msg}")
+        self.run_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+        self.stage_bar.setVisible(False)
+        self.file_bar.setVisible(False)
+        self._status_owner = "batch"
+        self.status.show_message(f"Batch failed: {msg}", "error")
 
     def cancel_batch(self):
         if self.batch_worker and self.batch_worker.isRunning():
