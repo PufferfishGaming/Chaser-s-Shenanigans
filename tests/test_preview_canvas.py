@@ -230,6 +230,18 @@ def test_release_still_reports_after_live_frames(canvas):
 # ---------------------------------------------------------------------------
 # Control panel width
 # ---------------------------------------------------------------------------
+def test_window_settings_never_touch_the_real_store(qt_app, private_qsettings):
+    """The window's settings must be the private per-test INI file, not the
+    user's real store (the registry on Windows), which a test would wipe."""
+    from photoborder_gui import MainWindow
+
+    win = MainWindow()
+    assert win.settings.format() == QtCore.QSettings.IniFormat
+    where = os.path.normcase(os.path.normpath(os.path.dirname(win.settings.fileName())))
+    assert where == os.path.normcase(os.path.normpath(str(private_qsettings))), where
+    win.close()
+
+
 def test_panel_width_follows_its_content(qt_app):
     """The control panel must never clip its own widgets.
 
@@ -240,8 +252,8 @@ def test_panel_width_follows_its_content(qt_app):
     """
     from photoborder_gui import MainWindow
 
-    win = MainWindow()
-    win.settings.clear()
+    # A fresh window with no remembered state: conftest.py gives each test its
+    # own empty settings store, so the user's saved state is never read or wiped.
     win = MainWindow()
     win.resize(1400, 1200)
     win.show()
@@ -275,8 +287,7 @@ def test_panel_grows_for_wider_content(qt_app):
     """
     from photoborder_gui import MainWindow
 
-    baseline = MainWindow()
-    baseline.settings.clear()
+    # Fresh windows with no remembered state (conftest.py: private settings store).
     baseline = MainWindow()
     baseline.resize(1400, 1200)
     baseline.show()
