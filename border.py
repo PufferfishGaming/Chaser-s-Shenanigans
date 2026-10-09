@@ -264,6 +264,10 @@ def draw_exif(img: Image, exif: dict, border: Border, font: tuple, boldfont: tup
 
     # ---- the EXIF block's automatic layout --------------------------------
     exif_place = placements.get("exif") or layout.Placement()
+    # The custom text is sized from the AUTOMATIC body size, captured before the
+    # EXIF block's own multiplier. Reading `font_size` after it made the EXIF
+    # size control resize the custom text too, on top of its own multiplier.
+    auto_body_size = font_size
     size_mult = float(getattr(exif_place, "size_mult", 1.0) or 1.0)
     if size_mult != 1.0:
         font_size = max(1, int(round(font_size * size_mult)))
@@ -339,7 +343,7 @@ def draw_exif(img: Image, exif: dict, border: Border, font: tuple, boldfont: tup
     custom_box = None
     custom_used_centre = False
     if custom_text and custom_path:
-        base = font_size if not stack_lines else font_obj.size
+        base = auto_body_size
         c_size = max(1, int(round(base * float(custom_size_mult or 1.0))))
         # Cap so the glyphs can never be taller than the band.
         while c_size > 1:

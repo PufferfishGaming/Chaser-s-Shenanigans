@@ -9,6 +9,7 @@ picklable-friendly so the same `process_image` can be called both:
   * inside a ProcessPoolExecutor worker (with progress_cb=None) for parallel folder runs.
 """
 import os
+import math
 import logging
 from PIL import Image, ImageOps
 from exif import get_exif
@@ -49,6 +50,37 @@ _CLOCKWISE = {
 }
 
 ORIENTATION_TAG = 274
+
+# Instagram's default portrait post shape. A landscape carousel is N of these
+# side by side, so the bordered canvas is padded to N * 4:5 and cut into N
+# slides that line up seamlessly when swiped.
+INSTAGRAM_SLIDE_RATIO = (4, 5)
+
+
+def slides_ratio(slides: int) -> float:
+    """Canvas width/height for `slides` Instagram portrait slides side by side."""
+    w, h = INSTAGRAM_SLIDE_RATIO
+    return slides * w / h
+
+
+def split_into_slides(canvas: Image.Image, slides: int):
+    """Pad `canvas` to exactly `slides` x 4:5 and cut it into that many slides.
+
+    `create_border` pads to the ratio with ceil(), so the canvas is within a
+    pixel or two of the target but not exactly on it, and its width need not
+    divide evenly. The few missing pixels are added here as white, split evenly
+    round the canvas, so every slide is exactly 4:5 and the same size - a
+    one-pixel difference between slides shows as a step when swiping.
+    """
+    w_unit, h_unit = INSTAGRAM_SLIDE_RATIO
+    k = max(math.ceil(canvas.width / (w_unit * slides)), math.ceil(canvas.height / h_unit))
+    slide_w, slide_h = w_unit * k, h_unit * k
+    full_w = slide_w * slides
+    if (full_w, slide_h) != canvas.size:
+        padded = Image.new("RGB", (full_w, slide_h), (255, 255, 255))
+        padded.paste(canvas, ((full_w - canvas.width) // 2, (slide_h - canvas.height) // 2))
+        canvas = padded
+    return [canvas.crop((i * slide_w, 0, (i + 1) * slide_w, slide_h)) for i in range(slides)]
 
 
 def open_oriented(path: str, rotate: int = 0, auto_orient: bool = True,
@@ -257,7 +289,8 @@ def process_image(path: str,
                   custom_centered: bool = False,
                   placements: dict = None,
                   geometry_out: dict = None,
-                  preview_source=None) -> str:
+                  preview_source=None,
+                  slides: int = 1) -> str:
     """Add a border to an image and save it into output_root.
 
     Supported image types: jpg, jpeg, png.
@@ -303,11 +336,19 @@ def process_image(path: str,
         preview_source: A PreviewSource from build_preview_source, reusing the
                         decode + downscale + palette extraction across renders.
                         The caller keeps ownership; this must not close it.
+        slides: Instagram landscape mode when > 1. The canvas is padded to
+                `slides` x 4:5 (overriding target_ratio) and saved as that many
+                4:5 slides, `_slide1`, `_slide2`, ... The GUI's preview passes 1
+                with the same ratio and draws the cut lines itself.
 
     Returns:
-        The output path, or None if the file type was unsupported.
+        The output path (the first slide's, in Instagram landscape mode), or None
+        if the file type was unsupported.
     """
     cb = progress_cb or _noop
+    slides = max(1, int(slides or 1))
+    if slides > 1:
+        target_ratio = slides_ratio(slides)
 
     filetypes = list(FILETYPES)
     path_dot_parts = path.split('.')
@@ -500,7 +541,6 @@ def process_image(path: str,
 
     # --- save -------------------------------------------------------------
     # quality=95 + subsampling=0 keeps red edges sharp. See original notes.
-    save_path = resolve_output_path(path, input_root, output_root, save_as, ext, overwrite=overwrite)
     exifdata = img.getexif()
     # The orientation is already baked into the pixels, so re-emitting the source
     # tag makes any viewer that honours it turn the finished canvas - caption band
@@ -509,7 +549,18 @@ def process_image(path: str,
         exifdata[ORIENTATION_TAG] = 1
     except Exception:  # noqa: BLE001 - a file with no writable exif block
         pass
-    img_with_border.save(save_path, exif=exifdata, subsampling=0, quality=95)
+    if slides > 1:
+        first_path = None
+        for i, piece in enumerate(split_into_slides(img_with_border, slides), start=1):
+            piece_path = resolve_output_path(path, input_root, output_root,
+                                             f'{save_as}_slide{i}', ext, overwrite=overwrite)
+            piece.save(piece_path, exif=exifdata, subsampling=0, quality=95)
+            piece.close()
+            first_path = first_path or piece_path
+        save_path = first_path
+    else:
+        save_path = resolve_output_path(path, input_root, output_root, save_as, ext, overwrite=overwrite)
+        img_with_border.save(save_path, exif=exifdata, subsampling=0, quality=95)
 
     img_with_border.close()
     # A borrowed preview source belongs to the caller, which reuses it across

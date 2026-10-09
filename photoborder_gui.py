@@ -34,7 +34,7 @@ import json
 import fontcatalog
 import layout as layout_mod
 from border import BorderType
-from core import process_image, build_preview_source, preview_source_key
+from core import process_image, build_preview_source, preview_source_key, slides_ratio
 from filemanager import should_include_file, get_directory_files
 from worker import WorkerArgs, WorkerResult, process_one, set_below_normal_priority
 import theme
@@ -64,7 +64,13 @@ ROTATION_PRESETS = [
     ("90° anticlockwise", 270),
 ]
 
+# Instagram landscape mode's entry in the ratio combo. Not a float, because it is
+# a ratio AND a split: `_current_params` turns it into target_ratio + slides.
+IG_LANDSCAPE = "ig_landscape"
+IG_LANDSCAPE_SLIDES = 2
+
 # Aspect-ratio presets: label -> width/height float (None = native, no padding).
+# New entries go at the END: the selection is persisted by index.
 RATIO_PRESETS = [
     ("Native (no padding)", None),
     ("1:1 Square", 1.0),
@@ -74,7 +80,21 @@ RATIO_PRESETS = [
     ("2:3", 2 / 3),
     ("16:9 Wide", 16 / 9),
     ("9:16 Tall", 9 / 16),
+    ("Instagram landscape (2 × 4:5)", IG_LANDSCAPE),
 ]
+
+
+def ratio_key(value) -> str:
+    """Stable settings key for a ratio combo entry, for per-ratio placements.
+
+    A string rather than the float itself: JSON object keys are strings, and
+    4 / 5 printed at full precision is not something to round-trip through text.
+    """
+    if value is None:
+        return "native"
+    if isinstance(value, str):
+        return value
+    return f"{float(value):.4f}"
 
 
 def module_fontdir() -> str:
@@ -221,6 +241,19 @@ class PreviewCanvas(QtWidgets.QLabel):
             painter.setPen(pen)
             painter.setBrush(QtCore.Qt.NoBrush)
             painter.drawRect(rect.adjusted(-2, -2, 2, 2))
+
+        # Instagram landscape mode: where the canvas will be cut into slides. The
+        # preview is rendered whole, so this line is the only sign of the cut.
+        slides = int(self._geometry.get("slides") or 1)
+        canvas = self._geometry.get("canvas")
+        if slides > 1 and canvas:
+            painter.setPen(QtGui.QPen(QtGui.QColor(255, 60, 120), 1, QtCore.Qt.DashLine))
+            for i in range(1, slides):
+                cut_x = canvas[0] * i / slides
+                line = self._box_rect((cut_x, 0, cut_x, canvas[1]))
+                if line is not None:
+                    painter.drawLine(QtCore.QPointF(line.left(), line.top()),
+                                     QtCore.QPointF(line.left(), line.bottom()))
         painter.end()
 
     # ---- interaction ---------------------------------------------------
@@ -359,6 +392,8 @@ class PreviewWorker(QtCore.QThread):
             )
             if self._cancelled:
                 return
+            # Rendered whole; the canvas draws the cut lines from this.
+            geometry["slides"] = p.get("slides", 1)
             self.done.emit(out, geometry, source)
         except _Cancelled:
             return
@@ -369,6 +404,16 @@ class PreviewWorker(QtCore.QThread):
 
 class _Cancelled(Exception):
     pass
+
+
+def _saved_message(out_path, slides=1):
+    """Batch log line. process_image returns the first slide's path in Instagram
+    landscape mode, so say how many files were really written."""
+    name = os.path.basename(out_path) if out_path else "?"
+    if slides and slides > 1:
+        more = slides - 1
+        return f"Saved: {name} (+{more} more slide{'s' if more > 1 else ''})"
+    return f"Saved: {name}"
 
 
 # ----------------------------------------------------------------------------
@@ -442,9 +487,10 @@ class BatchWorker(QtCore.QThread):
                     rotate=p.get("rotate", 0),
                     auto_orient=p.get("auto_orient", True),
                     placements=p.get("placements"),
+                    slides=p.get("slides", 1),
                 )
                 success += 1
-                self.file_done.emit(i + 1, total, path, f"Saved: {os.path.basename(out)}")
+                self.file_done.emit(i + 1, total, path, _saved_message(out, p.get("slides", 1)))
             except _Cancelled:
                 break
             except Exception as e:  # noqa: BLE001
@@ -484,7 +530,7 @@ class BatchWorker(QtCore.QThread):
                     else:
                         success += 1
                         self.file_done.emit(done, total, res.path,
-                                            f"Saved: {os.path.basename(res.save_path)}")
+                                            _saved_message(res.save_path, p.get("slides", 1)))
         except Exception as e:  # noqa: BLE001
             self.failed.emit(f"{type(e).__name__}: {e}")
             return
@@ -506,6 +552,7 @@ class BatchWorker(QtCore.QThread):
                 rotate=p.get("rotate", 0),
                 auto_orient=p.get("auto_orient", True),
                 placements=p.get("placements"),
+                slides=p.get("slides", 1),
             )
             for path in self.paths
         ]
@@ -736,6 +783,10 @@ class MainWindow(QtWidgets.QMainWindow):
         # `custom_centered` behaviour, and Left/Right are new.
         sec_place = ui.Collapsible("Placement", True)
         self.placements = layout_mod.default_placements()
+        # Placements remembered per aspect ratio, keyed by `ratio_key`. The ACTIVE
+        # ratio's set lives in `self.placements` and is stashed here on a switch.
+        self._placements_by_ratio = {}
+        self._active_ratio_key = ratio_key(self.ratio_combo.currentData())
         self._place_widgets = {}
 
         sec_place.add(ui.wrap_label(
@@ -1255,7 +1306,10 @@ class MainWindow(QtWidgets.QMainWindow):
             "add_exif": self.cb_exif.isChecked(),
             "add_palette": self.cb_palette.isChecked(),
             "border_type": self.border_combo.currentData(),
-            "target_ratio": self.ratio_combo.currentData(),
+            "target_ratio": self._target_ratio(),
+            # Instagram landscape mode: the canvas is cut into this many 4:5 slides
+            # on export. The preview renders it whole and draws the cut.
+            "slides": self._slides(),
             # (filename, variant_index, weight_name) - the weight matters because
             # most of the bundled families are variable fonts. Plain tuples, so
             # they still pickle across the ProcessPoolExecutor boundary.
@@ -1281,14 +1335,40 @@ class MainWindow(QtWidgets.QMainWindow):
             "auto_orient": True,
         }
 
+    def _slides(self):
+        return IG_LANDSCAPE_SLIDES if self.ratio_combo.currentData() == IG_LANDSCAPE else 1
+
+    def _target_ratio(self):
+        if self.ratio_combo.currentData() == IG_LANDSCAPE:
+            return slides_ratio(IG_LANDSCAPE_SLIDES)
+        return self.ratio_combo.currentData()
+
     def _on_ratio_changed(self):
+        """Swap in the placements remembered for the newly chosen ratio.
+
+        Placements are kept per ratio: a layout tuned for 16:9 and another for 4:5
+        each come back when their ratio is chosen again. A ratio that has never
+        been set up starts from the default placement.
+        """
+        new_key = ratio_key(self.ratio_combo.currentData())
+        old_key = getattr(self, "_active_ratio_key", None)
+        if new_key != old_key and hasattr(self, "_placements_by_ratio"):
+            if old_key is not None:
+                self._placements_by_ratio[old_key] = dict(self.placements)
+            self._active_ratio_key = new_key
+            stored = self._placements_by_ratio.get(new_key)
+            self.placements = dict(stored) if stored else layout_mod.default_placements()
+            self._sync_placement_widgets()
         self._update_ratio_hint()
         self._schedule_preview()
 
     def _update_ratio_hint(self):
-        # No border type overrides the ratio control any more, so nothing to warn
-        # about. Kept (and wired to the combos) so a future override has a home.
-        self.ratio_hint.setText("")
+        if self.ratio_combo.currentData() == IG_LANDSCAPE:
+            self.ratio_hint.setText(
+                f"Saves {IG_LANDSCAPE_SLIDES} slides of 4:5 (_slide1, _slide2) for an "
+                "Instagram carousel. The dashed line on the preview is the cut.")
+        else:
+            self.ratio_hint.setText("")
 
     def _invalidate_source_cache(self):
         """Drop the cached source. Only the inputs it actually depends on do this.
@@ -1360,6 +1440,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._live_drag_budget_ms = max(16, min(400, int(elapsed * 1.2)))
         self._last_drag_render = self._drag_render_clock.elapsed()
 
+        geometry["slides"] = params.get("slides", 1)
         pix = QtGui.QPixmap(out)
         if not pix.isNull():
             # Deliberately NOT syncing the placement spin boxes here: that rebuilds
@@ -1609,6 +1690,10 @@ class MainWindow(QtWidgets.QMainWindow):
         # JSON rather than a nested QVariant: QSettings' nested-dict round-tripping
         # is platform-dependent, and settings are never load-bearing here.
         s.setValue("placements", json.dumps(layout_mod.placements_to_settings(self.placements)))
+        by_ratio = dict(self._placements_by_ratio)
+        by_ratio[self._active_ratio_key] = self.placements
+        s.setValue("placements_by_ratio", json.dumps(
+            {k: layout_mod.placements_to_settings(v) for k, v in by_ratio.items()}))
         s.sync()
 
     def _load_settings(self):
@@ -1691,6 +1776,26 @@ class MainWindow(QtWidgets.QMainWindow):
         elif get_bool("text_center", False):
             # Migrate the superseded checkbox: it meant exactly the Centre anchor.
             self.placements["text"] = layout_mod.Placement(anchor="center")
+
+        # Per-ratio placements. Restoring the ratio index above already ran
+        # `_on_ratio_changed`, so `_active_ratio_key` is the restored ratio. A
+        # settings file from before per-ratio placements has only the single set
+        # loaded above, which becomes that ratio's.
+        raw = s.value("placements_by_ratio", "")
+        by_ratio = None
+        if raw:
+            try:
+                by_ratio = json.loads(raw)
+            except (ValueError, TypeError):
+                by_ratio = None
+        self._placements_by_ratio = {}
+        if isinstance(by_ratio, dict):
+            for key, value in by_ratio.items():
+                if isinstance(key, str) and isinstance(value, dict):
+                    self._placements_by_ratio[key] = layout_mod.placements_from_settings(value)
+        stored = self._placements_by_ratio.get(self._active_ratio_key)
+        if stored:
+            self.placements = dict(stored)
         self._sync_placement_widgets()
 
         # Re-apply background toggle side effects (disables spinbox + hint).

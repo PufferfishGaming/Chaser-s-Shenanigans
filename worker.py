@@ -62,6 +62,7 @@ class WorkerArgs:
     custom_size_mult: float = 1.0
     custom_centered: bool = False
     placements: dict = None          # {element: layout.Placement} - a picklable dataclass
+    slides: int = 1                  # Instagram landscape mode: number of 4:5 slides
 
 
 @dataclass
@@ -97,6 +98,7 @@ def process_one(args: WorkerArgs) -> WorkerResult:
             custom_size_mult=args.custom_size_mult,
             custom_centered=args.custom_centered,
             placements=args.placements,
+            slides=args.slides,
         )
         return WorkerResult(path=args.path, save_path=save_path)
     except Exception as e:  # noqa: BLE001 - intentionally broad, reported not raised
