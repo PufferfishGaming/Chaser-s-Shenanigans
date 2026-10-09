@@ -12,6 +12,7 @@ Three separate requests that landed together:
     slides that line up when swiped.
 """
 import os
+import subprocess
 import sys
 
 import pytest
@@ -131,3 +132,18 @@ def test_no_unsplit_file_is_written_in_slide_mode(source, tmp_path):
     _render(source, out_dir, slides=2)
     names = sorted(os.listdir(out_dir))
     assert len(names) == 2 and all("_slide" in n for n in names), names
+
+
+def test_cli_instagram_landscape_writes_two_slides(source, tmp_path):
+    main_py = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "main.py")
+    out_dir = tmp_path / "cli"
+    run = subprocess.run([sys.executable, main_py, source, "-o", str(out_dir), "-t", "p",
+                          "--instagram-landscape", "--ratio", "1:1"],
+                         capture_output=True, text=True, timeout=120)
+    assert run.returncode == 0, run.stderr
+    names = sorted(os.listdir(out_dir))
+    assert [n.rsplit("_", 1)[-1] for n in names] == ["slide1.png", "slide2.png"], names
+    for n in names:
+        with Image.open(out_dir / n) as im:
+            assert im.width * 5 == im.height * 4
+    assert "--ratio 1:1 ignored" in run.stderr

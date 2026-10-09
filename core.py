@@ -55,6 +55,8 @@ ORIENTATION_TAG = 274
 # side by side, so the bordered canvas is padded to N * 4:5 and cut into N
 # slides that line up seamlessly when swiped.
 INSTAGRAM_SLIDE_RATIO = (4, 5)
+# Instagram landscape mode (GUI ratio preset, CLI --instagram-landscape).
+INSTAGRAM_LANDSCAPE_SLIDES = 2
 
 
 def slides_ratio(slides: int) -> float:

@@ -9,7 +9,7 @@ import argparse
 import logging
 from filemanager import should_include_file, get_directory_files
 from border import BorderType
-from core import process_image, ROTATIONS
+from core import process_image, ROTATIONS, INSTAGRAM_LANDSCAPE_SLIDES
 import fontcatalog
 import layout as layout_mod
 
@@ -99,6 +99,10 @@ def parse_arguments():
     parser.add_argument('--ratio', default='native',
                         help='Target output aspect ratio, padded with extra border (never crops). '
                              'One of: native, 1:1, 4:5, 5:4, 3:2, 2:3, 16:9, 9:16, or custom W:H.')
+    parser.add_argument('--instagram-landscape', '--ig-landscape', dest='instagram_landscape',
+                        action='store_true', default=False,
+                        help='Instagram landscape mode: pad to 2 x 4:5 and save two 4:5 slides '
+                             '(_slide1, _slide2) for a carousel. Overrides --ratio.')
     parser.add_argument('--no-overwrite', action='store_true', default=False,
                         help='Never overwrite existing output files; append " (1)", " (2)", etc. instead')
     parser.add_argument('--include', nargs='+', default=['*.jpg', '*.jpeg', '*.png', '*.JPG', '*.JPEG', '*.PNG'],
@@ -178,6 +182,13 @@ def main():
     fontdir = os.path.join(moduledir, "fonts")
 
     target_ratio = parse_ratio(args.ratio)
+    slides = 1
+    if args.instagram_landscape:
+        # process_image sets the ratio itself from the slide count.
+        if target_ratio is not None:
+            logger.info('--ratio %s ignored: --instagram-landscape always makes 4:5 slides.',
+                        args.ratio)
+        slides = INSTAGRAM_LANDSCAPE_SLIDES
     placements = parse_place(args.place)
 
     # -f / -fb still take a bare filename and WIN over --exif-font, so existing
@@ -221,8 +232,12 @@ def main():
             custom_size_mult=args.text_size,
             custom_centered=text_center,
             placements=placements,
+            slides=slides,
         )
-        logger.info(f'Saved as {save_path}')
+        if slides > 1:
+            logger.info(f'Saved as {save_path} (+{slides - 1} more slide)')
+        else:
+            logger.info(f'Saved as {save_path}')
 
 
 if __name__ == "__main__":

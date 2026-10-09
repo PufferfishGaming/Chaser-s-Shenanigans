@@ -34,7 +34,8 @@ import json
 import fontcatalog
 import layout as layout_mod
 from border import BorderType
-from core import process_image, build_preview_source, preview_source_key, slides_ratio
+from core import (process_image, build_preview_source, preview_source_key, slides_ratio,
+                  INSTAGRAM_LANDSCAPE_SLIDES)
 from filemanager import should_include_file, get_directory_files
 from worker import WorkerArgs, WorkerResult, process_one, set_below_normal_priority
 import theme
@@ -67,7 +68,7 @@ ROTATION_PRESETS = [
 # Instagram landscape mode's entry in the ratio combo. Not a float, because it is
 # a ratio AND a split: `_current_params` turns it into target_ratio + slides.
 IG_LANDSCAPE = "ig_landscape"
-IG_LANDSCAPE_SLIDES = 2
+IG_LANDSCAPE_SLIDES = INSTAGRAM_LANDSCAPE_SLIDES
 
 # Aspect-ratio presets: label -> width/height float (None = native, no padding).
 # New entries go at the END: the selection is persisted by index.
