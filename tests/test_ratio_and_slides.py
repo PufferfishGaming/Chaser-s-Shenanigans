@@ -77,6 +77,25 @@ def test_exif_size_does_not_change_the_custom_text_size(source, tmp_path, border
 
 
 @pytest.mark.parametrize("border_type", list(BorderType))
+@pytest.mark.parametrize("centered", [False, True])
+@pytest.mark.parametrize("mult", [0.5, 1.3, 1.6, 2.5])
+def test_exif_size_does_not_move_the_custom_text(source, tmp_path, border_type, centered, mult):
+    """The custom text sits where it would with the EXIF at 1x, whatever the EXIF size.
+
+    It used to be laid out against the RESIZED caption - a line under the block on
+    POLAROID/LARGE, the next segment of the row on SMALL/MEDIUM - so a bigger
+    EXIF pushed it down or along. An explicit size is taken literally instead,
+    and a big caption may overlap the text.
+    """
+    _, base = _render(source, tmp_path / "a", border_type=border_type, custom_centered=centered)
+    _, other = _render(source, tmp_path / "b", border_type=border_type, custom_centered=centered,
+                       placements={"exif": Placement(size_mult=mult)})
+    a, b = base["boxes"]["text"], other["boxes"]["text"]
+    assert all(abs(p - q) <= 1 for p, q in zip(a, b)), f"text moved {a} -> {b} at EXIF {mult}x"
+    assert other["custom_centered"] == base["custom_centered"]
+
+
+@pytest.mark.parametrize("border_type", list(BorderType))
 def test_the_placement_text_size_resizes_the_custom_text(source, tmp_path, border_type):
     """The Placement grid's Text row "Size" used to be stored and never read."""
     _, base = _render(source, tmp_path / "a", border_type=border_type)

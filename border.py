@@ -268,55 +268,70 @@ def draw_exif(img: Image, exif: dict, border: Border, font: tuple, boldfont: tup
     # EXIF block's own multiplier. Reading `font_size` after it made the EXIF
     # size control resize the custom text too, on top of its own multiplier.
     auto_body_size = font_size
+    auto_heading_size = heading_font_size
     size_mult = float(getattr(exif_place, "size_mult", 1.0) or 1.0)
     if size_mult != 1.0:
         font_size = max(1, int(round(font_size * size_mult)))
         heading_font_size = max(1, int(round(heading_font_size * size_mult)))
 
-    font_obj = tm.create_font(font_size, fontpath=font_path, index=font_index, weight=font_weight)
-    heading_font = tm.create_font(heading_font_size, fontpath=bold_path, index=bold_index,
-                                  weight=bold_weight)
+    def _layout_exif(body_sz, head_sz):
+        """The EXIF block's lines at the given sizes: (draws, first baseline, body font)."""
+        font_obj = tm.create_font(body_sz, fontpath=font_path, index=font_index, weight=font_weight)
+        heading_font = tm.create_font(head_sz, fontpath=bold_path, index=bold_index,
+                                      weight=bold_weight)
 
-    if stack_lines:
-        # 3 lines of text: 1 heading, two normal. Minus heading margins.
-        total_font_height = heading_font.size + (2 * font_obj.size) - (heading_font.size / 2)
-        y0 = band_top + (band / 2) - (total_font_height / 2)
-    else:
-        y0 = band_top + (band / 2) + (heading_font.size / 3)
-
-    specs = [(line_heading, heading_font_size, bold_path, bold_index, bold_weight, heading_font,
-              (100, 100, 100)),
-             (line_lens, font_size, font_path, font_index, font_weight, font_obj, (128, 128, 128)),
-             (line_settings, font_size, font_path, font_index, font_weight, font_obj, (128, 128, 128))]
-
-    draws = []          # (text, font_obj, x, baseline_y, fill)
-    if stack_lines:
-        widths = [_line_metrics(t, s, p, i, w)[0] for (t, s, p, i, w, _f, _c) in specs]
-        block_w = max(widths) if widths else 0.0
-        if horizontally_centered:
-            block_x = (img.width - block_w) / 2
+        if stack_lines:
+            # 3 lines of text: 1 heading, two normal. Minus heading margins.
+            total_font_height = heading_font.size + (2 * font_obj.size) - (heading_font.size / 2)
+            y0 = band_top + (band / 2) - (total_font_height / 2)
         else:
-            block_x = border.left
-        # Line alignment inside the block is separable from where the block sits
-        # by an algebraic identity: LARGE's old "centre each line on the canvas"
-        # is exactly "centre the block, then centre the lines inside it". Keeping
-        # it explicit lets the two be chosen independently without changing any
-        # existing output.
-        line_align = getattr(exif_place, "line_align", None) or \
-            layout.default_line_align("exif", type_name)
-        factor = layout.LINE_ALIGN_FACTORS.get(line_align, 0.0)
-        y = y0
-        for (text_, size_, path_, idx_, wt_, fobj, fill_), w_ in zip(specs, widths):
-            x = block_x + factor * (block_w - w_)
-            draws.append((text_, fobj, x, y, fill_, size_, path_, idx_, wt_))
-            y = y + fobj.size + (fobj.size / 2)
+            y0 = band_top + (band / 2) + (heading_font.size / 3)
+
+        specs = [(line_heading, head_sz, bold_path, bold_index, bold_weight, heading_font,
+                  (100, 100, 100)),
+                 (line_lens, body_sz, font_path, font_index, font_weight, font_obj, (128, 128, 128)),
+                 (line_settings, body_sz, font_path, font_index, font_weight, font_obj, (128, 128, 128))]
+
+        draws = []          # (text, font_obj, x, baseline_y, fill)
+        if stack_lines:
+            widths = [_line_metrics(t, s, p, i, w)[0] for (t, s, p, i, w, _f, _c) in specs]
+            block_w = max(widths) if widths else 0.0
+            if horizontally_centered:
+                block_x = (img.width - block_w) / 2
+            else:
+                block_x = border.left
+            # Line alignment inside the block is separable from where the block sits
+            # by an algebraic identity: LARGE's old "centre each line on the canvas"
+            # is exactly "centre the block, then centre the lines inside it". Keeping
+            # it explicit lets the two be chosen independently without changing any
+            # existing output.
+            line_align = getattr(exif_place, "line_align", None) or \
+                layout.default_line_align("exif", type_name)
+            factor = layout.LINE_ALIGN_FACTORS.get(line_align, 0.0)
+            y = y0
+            for (text_, size_, path_, idx_, wt_, fobj, fill_), w_ in zip(specs, widths):
+                x = block_x + factor * (block_w - w_)
+                draws.append((text_, fobj, x, y, fill_, size_, path_, idx_, wt_))
+                y = y + fobj.size + (fobj.size / 2)
+        else:
+            x = border.left
+            y = y0
+            for (text_, size_, path_, idx_, wt_, fobj, fill_) in specs:
+                w_ = _line_metrics(text_, size_, path_, idx_, wt_)[0]
+                draws.append((text_, fobj, x, y, fill_, size_, path_, idx_, wt_))
+                x = x + w_ + (fobj.size / 2)
+        return draws, y0, font_obj
+
+    draws, y0, font_obj = _layout_exif(font_size, heading_font_size)
+    # The custom text is laid out against the EXIF block at its AUTOMATIC size,
+    # so resizing the EXIF caption never moves it: an explicit size is taken
+    # literally, like a drag, and a much bigger caption may overlap the text
+    # rather than shove it down or along the row. At 1x the two are the same
+    # layout, so default output is unchanged.
+    if size_mult != 1.0:
+        ref_draws, ref_y0, ref_font = _layout_exif(auto_body_size, auto_heading_size)
     else:
-        x = border.left
-        y = y0
-        for (text_, size_, path_, idx_, wt_, fobj, fill_) in specs:
-            w_ = _line_metrics(text_, size_, path_, idx_, wt_)[0]
-            draws.append((text_, fobj, x, y, fill_, size_, path_, idx_, wt_))
-            x = x + w_ + (fobj.size / 2)
+        ref_draws, ref_y0, ref_font = draws, y0, font_obj
 
     def _ink_boxes_of(items):
         out = []
@@ -337,6 +352,7 @@ def draw_exif(img: Image, exif: dict, border: Border, font: tuple, boldfont: tup
         return out
 
     exif_box = _union(_boxes_of(draws))
+    ref_exif_box = _union(_boxes_of(ref_draws))
 
     # ---- the custom text's automatic layout -------------------------------
     custom_draws = []
@@ -391,7 +407,7 @@ def draw_exif(img: Image, exif: dict, border: Border, font: tuple, boldfont: tup
             # self-correcting: POLAROID's left caption clears the centre and uses
             # it, LARGE centres its own caption and therefore does not, and an
             # over-long string falls back the same way.
-            if not _overlaps(centre_box, exif_box) and not _overlaps(centre_box, palette_box):
+            if not _overlaps(centre_box, ref_exif_box) and not _overlaps(centre_box, palette_box):
                 custom_draws.append((custom_text, c_font, cx, cy, (128, 128, 128),
                                      c_size, custom_path, custom_index, custom_weight))
                 custom_used_centre = True
@@ -403,12 +419,12 @@ def draw_exif(img: Image, exif: dict, border: Border, font: tuple, boldfont: tup
                 # draw_text_on_image advances by 1.5x the size of the line it just
                 # drew - a larger following line would reach its ascenders back up
                 # through it.
-                last = draws[-1] if draws else None
+                last = ref_draws[-1] if ref_draws else None
                 if last is not None:
                     prev_desc = _line_metrics(last[0], last[5], last[6], last[7], last[8])[2]
                     prev_y, prev_size = last[3], last[1].size
                 else:
-                    prev_desc, prev_y, prev_size = 0.0, y0, font_obj.size
+                    prev_desc, prev_y, prev_size = 0.0, ref_y0, ref_font.size
                 # Baseline from real INK metrics, not from the previous line's
                 # advance. draw_text_on_image advances by 1.5x the size of the line
                 # it just drew, so a custom line larger than the EXIF body reached
@@ -416,22 +432,22 @@ def draw_exif(img: Image, exif: dict, border: Border, font: tuple, boldfont: tup
                 # visibly struck through each other.
                 gap = max(2.0, prev_size * 0.25)
                 cy = prev_y + prev_desc + gap + c_asc
-                block_left = min((d[2] for d in draws), default=border.left)
+                block_left = min((d[2] for d in ref_draws), default=border.left)
                 block_right = max((d[2] + _line_metrics(d[0], d[5], d[6], d[7], d[8])[0]
-                                   for d in draws), default=border.left)
+                                   for d in ref_draws), default=border.left)
                 align = getattr(exif_place, "line_align", None) or \
                     layout.default_line_align("exif", type_name)
                 f = layout.LINE_ALIGN_FACTORS.get(align, 0.0)
                 cx = block_left + f * ((block_right - block_left) - c_w)
             else:
                 # Last segment of the single caption row.
-                last = draws[-1] if draws else None
+                last = ref_draws[-1] if ref_draws else None
                 if last is not None:
                     lw = _line_metrics(last[0], last[5], last[6], last[7], last[8])[0]
                     cx = last[2] + lw + (last[1].size / 2)
                     cy = last[3]
                 else:
-                    cx, cy = border.left, y0
+                    cx, cy = border.left, ref_y0
             # Two-sided clamp: clear the canvas bottom AND stay below band_top.
             cy = min(cy, img.height - c_desc - 1)
             cy = max(cy, band_top + c_asc + 1)
