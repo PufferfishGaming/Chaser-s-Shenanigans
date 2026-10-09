@@ -48,7 +48,7 @@ def source(tmp_path_factory):
 def _render(source, out_dir, **kw):
     geometry = {}
     out = process_image(
-        path=source, add_exif=True, add_palette=True,
+        path=source, add_exif=True, add_palette=kw.pop("add_palette", True),
         border_type=kw.pop("border_type", BorderType.POLAROID),
         font=fontcatalog.spec("ebgaramond"), boldfont=fontcatalog.spec("ebgaramond", bold=True),
         fontdir=FONTDIR, output_root=str(out_dir), input_root=os.path.dirname(source),
@@ -179,3 +179,19 @@ def test_cli_instagram_landscape_writes_two_slides(source, tmp_path):
         with Image.open(out_dir / n) as im:
             assert im.width * 5 == im.height * 4
     assert "--ratio 1:1 ignored" in run.stderr
+
+
+def test_cli_text_size_is_the_text_placement_size(source, tmp_path):
+    """--text-size and --place text=...,SIZE are one size, as in the GUI."""
+    main_py = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "main.py")
+    out_dir = tmp_path / "cli"
+    run = subprocess.run([sys.executable, main_py, source, "-o", str(out_dir), "-t", "p", "-e",
+                          "--exif-font", "ebgaramond", "--text", TEXT, "--text-font", "greatvibes",
+                          "--text-size", "1.6"],
+                         capture_output=True, text=True, timeout=120)
+    assert run.returncode == 0, run.stderr
+    (cli_name,) = os.listdir(out_dir)
+    direct, _ = _render(source, tmp_path / "direct", add_palette=False,
+                        placements={"text": Placement(size_mult=1.6)})
+    with Image.open(out_dir / cli_name) as a, Image.open(direct) as b:
+        assert ImageChops.difference(a.convert("RGB"), b.convert("RGB")).getbbox() is None

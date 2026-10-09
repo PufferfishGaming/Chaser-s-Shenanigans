@@ -423,10 +423,10 @@ your own:
 - **Text font** — the family for that string, chosen independently of the EXIF
   font. Script faces are marked `(script)` and are offered here only; they are
   unreadable as three lines of technical caption.
-- **Text size** — a 0.5x–3.0x multiplier on the automatic size. `1.0` matches the
-  EXIF body text.
 - **Alignment, position and size** for the custom text live in the **Placement**
-  section, alongside the other two elements.
+  section, alongside the other two elements. Its **Size** is a 0.25x–3.0x
+  multiplier where `1.0` matches the EXIF body text, and it is independent of the
+  EXIF caption's size.
 
 **Where the custom text lands.** It follows each border type's existing caption
 convention rather than a fixed corner, because there is no free corner: the
@@ -523,7 +523,7 @@ python main.py -t p -e -p -o output_folder Pictures\Waiting
 | `--exif-font` | Font family for the EXIF caption: `roboto`, `ebgaramond`, `cormorant`, `baskerville`, `lora` |
 | `--text` | Literal custom text for the bottom border |
 | `--text-font` | Font family for the custom text — any of the above plus `dancingscript`, `greatvibes`, `parisienne` |
-| `--text-size` | Multiplier on the automatic custom-text size (default `1.0`, range `0.5`–`3.0` in the GUI) |
+| `--text-size` | Custom-text size multiplier (default `1.0`). The same size as `SIZE` in `--place text=...`; if both are given they multiply |
 | `--text-center` / `--text-centre` | Centre the custom text. Applies to `p` and `l`; on `s`/`m` only without `-e` |
 | `--list-fonts` | Print the bundled families and exit |
 | `--include / --exclude` | Glob patterns for which files to process |

@@ -6,6 +6,7 @@
 
 import os
 import argparse
+from dataclasses import replace
 import logging
 from filemanager import should_include_file, get_directory_files
 from border import BorderType
@@ -126,7 +127,8 @@ def parse_arguments():
     parser.add_argument('--text-font', default=None, choices=fontcatalog.keys(),
                         help='Font family for the custom text (script faces allowed here)')
     parser.add_argument('--text-size', type=float, default=1.0,
-                        help='Multiplier on the automatic custom-text size (default 1.0)')
+                        help='Custom-text size multiplier (default 1.0). Same as SIZE in '
+                             '--place text=...; if both are given they multiply.')
     parser.add_argument('--text-center', '--text-centre', dest='text_center',
                         action='store_true', default=False,
                         help="Centre the custom text. Applies to p and l; on s/m only without -e")
@@ -190,6 +192,11 @@ def main():
                         args.ratio)
         slides = INSTAGRAM_LANDSCAPE_SLIDES
     placements = parse_place(args.place)
+    if args.text_size != 1.0:
+        # One size for the custom text, as in the GUI: --text-size is the text
+        # placement's size, not a second multiplier passed alongside it.
+        text_pl = placements.get("text") or layout_mod.Placement()
+        placements["text"] = replace(text_pl, size_mult=text_pl.size_mult * args.text_size)
 
     # -f / -fb still take a bare filename and WIN over --exif-font, so existing
     # command lines and hand-dropped font files keep working unchanged.
@@ -229,7 +236,6 @@ def main():
             auto_orient=not args.no_auto_orient,
             custom_text=args.text,
             custom_font=custom_spec,
-            custom_size_mult=args.text_size,
             custom_centered=text_center,
             placements=placements,
             slides=slides,

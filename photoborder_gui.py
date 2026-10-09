@@ -29,7 +29,9 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+import dataclasses
 import json
+import math
 
 import fontcatalog
 import layout as layout_mod
@@ -383,7 +385,6 @@ class PreviewWorker(QtCore.QThread):
                 preview_max_edge=p.get("preview_max_edge"),
                 custom_text=p.get("custom_text"),
                 custom_font=p.get("custom_font"),
-                custom_size_mult=p.get("custom_size_mult", 1.0),
                 custom_centered=p.get("custom_centered", False),
                 rotate=p.get("rotate", 0),
                 auto_orient=p.get("auto_orient", True),
@@ -483,7 +484,6 @@ class BatchWorker(QtCore.QThread):
                     overwrite=p.get("overwrite", True),
                     custom_text=p.get("custom_text"),
                     custom_font=p.get("custom_font"),
-                    custom_size_mult=p.get("custom_size_mult", 1.0),
                     custom_centered=p.get("custom_centered", False),
                     rotate=p.get("rotate", 0),
                     auto_orient=p.get("auto_orient", True),
@@ -548,7 +548,6 @@ class BatchWorker(QtCore.QThread):
                 overwrite=p.get("overwrite", True),
                 custom_text=p.get("custom_text"),
                 custom_font=p.get("custom_font"),
-                custom_size_mult=p.get("custom_size_mult", 1.0),
                 custom_centered=p.get("custom_centered", False),
                 rotate=p.get("rotate", 0),
                 auto_orient=p.get("auto_orient", True),
@@ -760,19 +759,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.text_font_combo.setCurrentIndex(default_row)
         self.text_font_combo.currentIndexChanged.connect(self._schedule_preview)
         tgrid.add_row("Text font", self.text_font_combo)
-
-        self.text_size_spin = QtWidgets.QDoubleSpinBox()
-        self.text_size_spin.setRange(0.5, 3.0)
-        self.text_size_spin.setSingleStep(0.1)
-        self.text_size_spin.setDecimals(1)
-        self.text_size_spin.setValue(1.0)
-        self.text_size_spin.setSuffix(" x")
-        self.text_size_spin.setToolTip(
-            "Multiplier on the automatic size. 1.0 matches the EXIF body text. "
-            "The result is capped so the text can never be taller than the "
-            "caption band or overlap the lines above it.")
-        self.text_size_spin.valueChanged.connect(self._schedule_preview)
-        tgrid.add_row("Text size", self.text_size_spin)
+        # No size control here: the custom text's size is the Placement grid's
+        # Text row "Size", beside the EXIF and palette sizes. There used to be a
+        # second "Text size" box here, and the two multiplied together.
         sec_type.add_layout(tgrid)
         p.add(sec_type)
         self._sections["typography"] = sec_type
@@ -859,7 +848,10 @@ class MainWindow(QtWidgets.QMainWindow):
             size.setSuffix(" x")
             size.setToolTip(
                 "Size multiplier. Scales the element's automatic, band-derived size, "
-                "so a given value looks the same at any export resolution.")
+                "so a given value looks the same at any export resolution."
+                + ("\n\nFor the custom text, 1.0 matches the EXIF body text, and the "
+                   "result is capped so it is never taller than the caption band."
+                   if name == "text" else ""))
             size.valueChanged.connect(
                 lambda _=0, n=name: self._on_placement_control_changed(n))
             grid.addWidget(size, row, 4)
@@ -1320,7 +1312,6 @@ class MainWindow(QtWidgets.QMainWindow):
             "custom_text": custom_text or None,
             "custom_font": fontcatalog.spec(text_key, default=fontcatalog.DEFAULT_TEXT_KEY)
                            if custom_text else None,
-            "custom_size_mult": self.text_size_spin.value(),
             # Send the raw checkbox state; core.process_image decides whether it is
             # honourable for this border type and EXIF combination, so the GUI and
             # the CLI cannot drift apart on that rule.
@@ -1425,7 +1416,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 preview_max_edge=PREVIEW_DISPLAY_EDGE,
                 custom_text=params.get("custom_text"),
                 custom_font=params.get("custom_font"),
-                custom_size_mult=params.get("custom_size_mult", 1.0),
                 custom_centered=params.get("custom_centered", False),
                 rotate=params.get("rotate", 0),
                 auto_orient=params.get("auto_orient", True),
@@ -1687,7 +1677,8 @@ class MainWindow(QtWidgets.QMainWindow):
         s.setValue("exif_font_key", self.exif_font_combo.currentData() or "")
         s.setValue("text_font_key", self.text_font_combo.currentData() or "")
         s.setValue("custom_text", self.text_edit.text())
-        s.setValue("text_size_mult", self.text_size_spin.value())
+        # Superseded by the Placement grid's Text size; folded in on load.
+        s.remove("text_size_mult")
         # JSON rather than a nested QVariant: QSettings' nested-dict round-tripping
         # is platform-dependent, and settings are never load-bearing here.
         s.setValue("placements", json.dumps(layout_mod.placements_to_settings(self.placements)))
@@ -1754,10 +1745,6 @@ class MainWindow(QtWidgets.QMainWindow):
         select_key(self.exif_font_combo, s.value("exif_font_key", ""), fontcatalog.DEFAULT_KEY)
         select_key(self.text_font_combo, s.value("text_font_key", ""), fontcatalog.DEFAULT_TEXT_KEY)
         self.text_edit.setText(s.value("custom_text", "") or "")
-        try:
-            self.text_size_spin.setValue(float(s.value("text_size_mult", 1.0)))
-        except (ValueError, TypeError):
-            self.text_size_spin.setValue(1.0)
 
         w = s.value("workers", None)
         if w is not None:
@@ -1797,6 +1784,25 @@ class MainWindow(QtWidgets.QMainWindow):
         stored = self._placements_by_ratio.get(self._active_ratio_key)
         if stored:
             self.placements = dict(stored)
+
+        # The Typography "Text size" box was merged into the Placement grid's Text
+        # Size. They used to multiply, so an old setting folds into every ratio's
+        # text size to keep the same output. Saving removes the key, so this runs
+        # once.
+        try:
+            old_mult = float(s.value("text_size_mult", 1.0))
+        except (ValueError, TypeError):
+            old_mult = 1.0
+        if old_mult != 1.0 and math.isfinite(old_mult):
+            def fold(placements):
+                pl = placements.get("text") or layout_mod.Placement()
+                placements["text"] = dataclasses.replace(
+                    pl, size_mult=min(3.0, max(0.25, round(pl.size_mult * old_mult, 2))))
+            fold(self.placements)
+            for other in self._placements_by_ratio.values():
+                if other is not self.placements:
+                    fold(other)
+            s.remove("text_size_mult")
         self._sync_placement_widgets()
 
         # Re-apply background toggle side effects (disables spinbox + hint).

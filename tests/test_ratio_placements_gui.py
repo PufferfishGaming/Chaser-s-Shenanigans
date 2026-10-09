@@ -113,3 +113,35 @@ def test_instagram_mode_params(win):
     p = win._current_params()
     assert p["slides"] == 1 and p["target_ratio"] is None
     assert win.ratio_hint.text() == ""
+
+
+def test_one_custom_text_size_control(win):
+    """The Typography "Text size" box was merged into the Placement grid's Text Size."""
+    assert not hasattr(win, "text_size_spin")
+    assert "custom_size_mult" not in win._current_params()
+    win._place_widgets["text"]["size"].setValue(1.7)
+    assert win._current_params()["placements"]["text"].size_mult == pytest.approx(1.7)
+
+
+def test_old_text_size_setting_folds_into_every_ratios_text_size(win):
+    import json
+    import layout as layout_mod
+    s = win.settings
+    s.setValue("ratio_index", win.ratio_combo.findData(16 / 9))
+    s.setValue("text_size_mult", 1.5)
+    s.setValue("placements_by_ratio", json.dumps({
+        "1.7778": layout_mod.placements_to_settings({"text": Placement(size_mult=1.2)}),
+        "0.8000": layout_mod.placements_to_settings({"text": Placement(anchor="right")}),
+    }))
+    win._load_settings()
+    win.preview_source = None
+    assert win.placements["text"].size_mult == pytest.approx(1.8)
+    assert win._place_widgets["text"]["size"].value() == pytest.approx(1.8)
+    _select(win, 4 / 5)
+    assert win.placements["text"] == Placement(anchor="right", size_mult=1.5)
+    # Folded once: the key is gone, so a reload does not multiply again.
+    assert s.value("text_size_mult") is None
+    win._save_settings()
+    win._load_settings()
+    win.preview_source = None
+    assert win.placements["text"].size_mult == pytest.approx(1.5)
