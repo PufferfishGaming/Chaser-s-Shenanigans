@@ -344,7 +344,12 @@ def draw_exif(img: Image, exif: dict, border: Border, font: tuple, boldfont: tup
     custom_used_centre = False
     if custom_text and custom_path:
         base = auto_body_size
-        c_size = max(1, int(round(base * float(custom_size_mult or 1.0))))
+        # Two multipliers: the Typography "Text size" and the Placement grid's
+        # Text row "Size", like the EXIF and palette rows' own. The row's used to
+        # be stored and never read, so that control did nothing.
+        text_place = placements.get("text") or layout.Placement()
+        text_mult = float(getattr(text_place, "size_mult", 1.0) or 1.0)
+        c_size = max(1, int(round(base * float(custom_size_mult or 1.0) * text_mult)))
         # Cap so the glyphs can never be taller than the band.
         while c_size > 1:
             asc = tm.measure_text_ascent(custom_text, c_size, custom_path, custom_index, custom_weight)

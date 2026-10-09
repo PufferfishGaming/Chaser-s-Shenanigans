@@ -76,6 +76,19 @@ def test_exif_size_does_not_change_the_custom_text_size(source, tmp_path, border
     assert (eb[3] - eb[1]) > (ea[3] - ea[1])
 
 
+@pytest.mark.parametrize("border_type", list(BorderType))
+def test_the_placement_text_size_resizes_the_custom_text(source, tmp_path, border_type):
+    """The Placement grid's Text row "Size" used to be stored and never read."""
+    _, base = _render(source, tmp_path / "a", border_type=border_type)
+    _, bigger = _render(source, tmp_path / "b", border_type=border_type,
+                        placements={"text": Placement(size_mult=1.6)})
+    a, b = base["boxes"]["text"], bigger["boxes"]["text"]
+    assert (b[2] - b[0]) > (a[2] - a[0]) * 1.3, f"text {a} -> {b}"
+    # ...and leaves the EXIF caption alone.
+    ea, eb = base["boxes"]["exif"], bigger["boxes"]["exif"]
+    assert abs((eb[3] - eb[1]) - (ea[3] - ea[1])) <= 1
+
+
 def test_the_text_size_control_still_resizes_the_custom_text(source, tmp_path):
     _, base = _render(source, tmp_path / "a")
     _, bigger = _render(source, tmp_path / "b", custom_size_mult=1.6)
